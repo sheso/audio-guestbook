@@ -38,6 +38,15 @@
 // And those used for inputs
 #define HOOK_PIN 0
 #define PLAYBACK_BUTTON_PIN 1
+// Rotary dial: pulse contact and "dial is turning" contact
+#define DIAL_PULSE_PIN 2
+#define DIAL_ACTIVE_PIN 3
+// Resting levels of both dial contacts are measured at boot, so either wiring works
+#define DIAL_DIGIT_GAP 200 // [ms] no pulses for this long means the digit is complete (pulses are ~100ms apart)
+#define DIAL_DIGIT_TIMEOUT 5000 // [ms] forget a partially dialled code after this pause
+#define DIAL_DISCARD_MS 5000 // [ms] recordings shorter than this are deleted when dialling starts
+#define SECRET_CODE "1337" // dial this to hear the last recorded message
+#define DEBUG_DIAL // print every change on the dial contacts - remove once the dial works
 
 #define noINSTRUMENT_SD_WRITE
 
@@ -65,9 +74,21 @@ File frec;
 // Use long 40ms debounce time on both switches
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
 Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
+// Dial pulses are only ~60ms long, so use short debounce times
+Bounce dialPulse = Bounce(DIAL_PULSE_PIN, 5);
+Bounce dialActive = Bounce(DIAL_ACTIVE_PIN, 10);
+
+// Dialling state
+char dialled[8];
+uint8_t numDialled = 0;
+uint8_t pulseCount = 0;
+elapsedMillis sinceLastDigit;
+elapsedMillis sinceLastPulse;
+uint8_t dialActiveRest; // pin 3 level while the dial is at rest
+uint8_t dialPulseRest;  // pin 2 level between pulses
 
 // Keep track of current state of the device
-enum Mode {Initialising, Ready, Prompting, Recording, Playing};
+enum Mode {Initialising, Ready, Prompting, Recording, Playing, Dialing};
 Mode mode = Mode::Initialising;
 
 float beep_volume = 0.04f; // not too loud :-)
@@ -101,6 +122,17 @@ void setup() {
   // Configure the input pins
   pinMode(HOOK_PIN, INPUT_PULLUP);
   pinMode(PLAYBACK_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DIAL_PULSE_PIN, INPUT_PULLUP);
+  pinMode(DIAL_ACTIVE_PIN, INPUT_PULLUP);
+  // Re-create the dial debouncers now the pull-ups are on (the global ones read the pins too early),
+  // and remember the resting levels - the dial must not be turned during boot
+  delay(10);
+  dialPulse = Bounce(DIAL_PULSE_PIN, 5);
+  dialActive = Bounce(DIAL_ACTIVE_PIN, 10);
+  dialPulseRest = dialPulse.read();
+  dialActiveRest = dialActive.read();
+  Serial.printf("Dial resting levels: pulse (pin %d) = %d, active (pin %d) = %d\n",
+                DIAL_PULSE_PIN, dialPulseRest, DIAL_ACTIVE_PIN, dialActiveRest);
 
   // Audio connections require memory, and the record queue
   // uses this memory to buffer incoming audio.
@@ -163,12 +195,14 @@ void loop() {
   // First, read the buttons
   buttonRecord.update();
   buttonPlay.update();
+  updateDial();
 
   switch(mode){
     case Mode::Ready:
       // Falling edge occurs when the handset is lifted --> 611 telephone
       if (buttonRecord.risingEdge()) {
         Serial.println("Handset lifted");
+        resetDial();
         mode = Mode::Prompting; print_mode();
       }
       else if(buttonPlay.fallingEdge()) {
@@ -180,6 +214,10 @@ void loop() {
     case Mode::Prompting:
       // Wait a second for users to put the handset to their ear
       wait(1000);
+      if (dialStarted()) {
+        startDialing();
+        break;
+      }
       // Play the greeting inviting them to record their message
       playWav1.play("greeting.wav");    
       // Wait until the  message has finished playing
@@ -188,6 +226,7 @@ void loop() {
         // Check whether the handset is replaced
         buttonRecord.update();
         buttonPlay.update();
+        updateDial();
         // Handset is replaced
         if(buttonRecord.fallingEdge()) {
           playWav1.stop();
@@ -200,7 +239,12 @@ void loop() {
           playLastRecording();
           return;
         }
-        
+        // Guest started dialling instead of listening
+        if (dialStarted()) {
+          playWav1.stop();
+          startDialing();
+          return;
+        }
       }
       // Debug message
       Serial.println("Starting Recording");
@@ -208,6 +252,10 @@ void loop() {
       waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
       wait(1250);
       waveform1.amplitude(0);
+      if (dialStarted()) {
+        startDialing();
+        break;
+      }
       // Start the recording function
       startRecording();
       break;
@@ -222,8 +270,43 @@ void loop() {
         // Play audio tone to confirm recording has ended
         end_Beep();
       }
+      else if (dialStarted()) {
+        // Guest is dialling rather than leaving a message
+        Serial.println("Dialling started, stopping recording");
+        stopRecording();
+        if (recByteSaved < DIAL_DISCARD_MS * byteRate / 1000) {
+          SD.remove(filename);
+          Serial.print("Discarded short recording ");
+          Serial.println(filename);
+        }
+        startDialing();
+      }
       else {
         continueRecording();
+      }
+      break;
+
+    case Mode::Dialing:
+      // Handset is replaced
+      if (buttonRecord.fallingEdge()) {
+        resetDial();
+        mode = Mode::Ready; print_mode();
+      }
+      else if (numDialled >= strlen(SECRET_CODE)) {
+        bool match = strncmp(dialled, SECRET_CODE, strlen(SECRET_CODE)) == 0;
+        resetDial();
+        if (match) {
+          Serial.println("Secret code dialled");
+          playLastRecording();
+        }
+        else {
+          Serial.println("Wrong code");
+          error_Beep();
+        }
+      }
+      else if (numDialled > 0 && !dialStarted() && sinceLastDigit > DIAL_DIGIT_TIMEOUT) {
+        Serial.println("Dialling timed out");
+        resetDial();
       }
       break;
 
@@ -235,6 +318,59 @@ void loop() {
   }   
   
   if (!MTPpaused) MTP.loop();  // This is mandatory to be placed in the loop code.
+}
+
+bool dialIsActive() {
+  return dialActive.read() != dialActiveRest;
+}
+
+// True once the dial has been moved or a digit is waiting to be processed
+bool dialStarted() {
+  return dialIsActive() || pulseCount > 0 || numDialled > 0;
+}
+
+void resetDial() {
+  numDialled = 0;
+  pulseCount = 0;
+}
+
+void startDialing() {
+  sinceLastDigit = 0;
+  mode = Mode::Dialing; print_mode();
+}
+
+// Count pulses, and store the digit once the pulses stop. The digit end is detected from the
+// gap between pulses, so the "dial moving" contact on pin 3 is optional.
+void updateDial() {
+  dialPulse.update();
+  dialActive.update();
+  // A pulse starts when the pulse contact leaves its resting level
+  bool pulse = (dialPulseRest == LOW) ? dialPulse.risingEdge() : dialPulse.fallingEdge();
+
+#if defined(DEBUG_DIAL)
+  if (dialActive.risingEdge() || dialActive.fallingEdge())
+    Serial.printf("%lu ms: active (pin %d) -> %d (%s)\n", millis(), DIAL_ACTIVE_PIN, dialActive.read(),
+                  dialIsActive() ? "dial moving" : "dial at rest");
+  if (dialPulse.risingEdge() || dialPulse.fallingEdge())
+    Serial.printf("%lu ms: pulse (pin %d) -> %d\n", millis(), DIAL_PULSE_PIN, dialPulse.read());
+#endif // defined(DEBUG_DIAL)
+
+  if (pulse) {
+    pulseCount++;
+    sinceLastPulse = 0;
+  }
+  else if (pulseCount > 0 && sinceLastPulse > DIAL_DIGIT_GAP && !dialIsActive()) {
+    if (pulseCount >= 1 && pulseCount <= 10 && numDialled < sizeof dialled) {
+      dialled[numDialled++] = '0' + (pulseCount % 10); // 10 pulses means "0"
+      sinceLastDigit = 0;
+      Serial.printf("Dialled digit %c (%d pulses), number so far: %.*s\n",
+                    dialled[numDialled - 1], pulseCount, numDialled, dialled);
+    }
+    else if (pulseCount > 0) {
+      Serial.printf("Ignored dial movement with %d pulses\n", pulseCount);
+    }
+    pulseCount = 0;
+  }
 }
 
 void setMTPdeviceChecks(bool nable)
@@ -452,9 +588,10 @@ void wait(unsigned int milliseconds) {
   while (msec <= milliseconds) {
     buttonRecord.update();
     buttonPlay.update();
+    updateDial();
     if (buttonRecord.fallingEdge()) Serial.println("Button (pin 0) Press");
     if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
-    if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release");
+    if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release"); 
     if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
   }
 }
@@ -533,6 +670,13 @@ void end_Beep(void) {
         waveform1.amplitude(0);
 }
 
+void error_Beep(void) {
+  waveform1.frequency(220);
+  waveform1.amplitude(beep_volume);
+  wait(1000);
+  waveform1.amplitude(0);
+}
+
 void print_mode(void) { // only for debugging
   Serial.print("Mode switched to: ");
   // Initialising, Ready, Prompting, Recording, Playing
@@ -540,6 +684,7 @@ void print_mode(void) { // only for debugging
   else if(mode == Mode::Prompting)  Serial.println(" Prompting");
   else if(mode == Mode::Recording)  Serial.println(" Recording");
   else if(mode == Mode::Playing)    Serial.println(" Playing");
+  else if(mode == Mode::Dialing)    Serial.println(" Dialing");
   else if(mode == Mode::Initialising)  Serial.println(" Initialising");
   else Serial.println(" Undefined");
 }
