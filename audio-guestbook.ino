@@ -35,9 +35,9 @@
 #define SDCARD_CS_PIN    10
 #define SDCARD_MOSI_PIN  11
 #define SDCARD_SCK_PIN   13
-// And those used for inputs
-#define HOOK_PIN 0
-#define PLAYBACK_BUTTON_PIN 1
+// And those used for inputs (pins 0 and 1 are kept free for Serial1 to the XIAO web server)
+#define HOOK_PIN 4
+#define PLAYBACK_BUTTON_PIN 5
 // Rotary dial: pulse contact and "dial is turning" contact
 #define DIAL_PULSE_PIN 2
 #define DIAL_ACTIVE_PIN 3
@@ -188,6 +188,9 @@ void setup() {
   // (i.e. saving a new audio recording onto the SD card)
   FsDateTime::setCallback(dateTime);
 
+  // Serial1 link to the XIAO web server (see xiao_link.ino)
+  xiaoBegin();
+
   mode = Mode::Ready; print_mode();
 }
 
@@ -318,6 +321,7 @@ void loop() {
   }   
   
   if (!MTPpaused) MTP.loop();  // This is mandatory to be placed in the loop code.
+  xiaoLoop(); // answer requests from the XIAO web server (file transfers only in Ready mode)
 }
 
 bool dialIsActive() {
@@ -589,10 +593,10 @@ void wait(unsigned int milliseconds) {
     buttonRecord.update();
     buttonPlay.update();
     updateDial();
-    if (buttonRecord.fallingEdge()) Serial.println("Button (pin 0) Press");
-    if (buttonPlay.fallingEdge()) Serial.println("Button (pin 1) Press");
-    if (buttonRecord.risingEdge()) Serial.println("Button (pin 0) Release"); 
-    if (buttonPlay.risingEdge()) Serial.println("Button (pin 1) Release");
+    if (buttonRecord.fallingEdge()) Serial.println("Button (hook) Press");
+    if (buttonPlay.fallingEdge()) Serial.println("Button (play) Press");
+    if (buttonRecord.risingEdge()) Serial.println("Button (hook) Release"); 
+    if (buttonPlay.risingEdge()) Serial.println("Button (play) Release");
   }
 }
 
