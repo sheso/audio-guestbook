@@ -13,7 +13,8 @@
  *   TIME <seq> <unixtime>           -> OK <seq>
  *   (any error)                     -> ERR <seq> <reason>
  *
- * Recordings are identified by their number: <num> 17 is the file " 00017.wav". Times are local
+ * Recordings are identified by their number: <num> 17 is the file "00017.wav". The sketch asks for
+ * " 00017.wav", but SdFat drops leading spaces, so that is the name on the card. Times are local
  * wall-clock time expressed as a unix timestamp, the same way the SD card file dates are stored.
  * LIST and GET are only answered in Ready mode, otherwise the reply is ERR <seq> BUSY: recording
  * always has priority over syncing. GET returns at most XIAO_MAX_CHUNK bytes and may return fewer
@@ -118,11 +119,13 @@ static void xiaoHandleLine(char* line) {
   }
 }
 
-// Recognise " NNNNN.wav" (the names startRecording() creates) and return NNNNN, or -1
+// Recognise "NNNNN.wav" (what startRecording() creates: SdFat drops the leading space of " NNNNN.wav")
+// and return NNNNN, or -1. A leading space is accepted too, in case another library keeps it.
 static long recordingNumber(const char* name) {
-  if (strlen(name) != 10 || name[0] != ' ' || strcmp(name + 6, ".wav") != 0) return -1;
+  if (name[0] == ' ') name++;
+  if (strlen(name) != 9 || strcasecmp(name + 5, ".wav") != 0) return -1;
   long num = 0;
-  for (int i = 1; i <= 5; i++) {
+  for (int i = 0; i < 5; i++) {
     if (!isdigit(name[i])) return -1;
     num = num * 10 + (name[i] - '0');
   }

@@ -5,7 +5,7 @@
 
 // A recording that has been completely copied to the XIAO SD card
 struct Recording {
-  uint32_t num;   // 17 for " 00017.wav" on the Teensy
+  uint32_t num;   // 17 for 00017.wav on the Teensy
   uint32_t size;  // bytes
   uint32_t mtime; // local time as unix timestamp, see CLOCK_VALID_FROM
   uint32_t crc;   // CRC-32 of the whole file, needed for the ZIP download
