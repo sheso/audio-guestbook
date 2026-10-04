@@ -72,7 +72,7 @@ Mode mode = Mode::Initialising;
 
 float beep_volume = 0.04f; // not too loud :-)
 
-uint32_t MTPcheckInterval; // default value of device check interval [ms]
+bool MTPpaused = false; // MTP servicing is paused while recording
 
 // variables for writing to WAV file
 unsigned long ChunkSize = 0L;
@@ -143,7 +143,6 @@ void setup() {
 //    MTP.addFilesystem(SD, "SD Card");
     MTP.addFilesystem(SD, "Kais Audio guestbook"); // choose a nice name for the SD card volume to appear in your file explorer
     Serial.println("Added SD card via MTP");
-    MTPcheckInterval = MTP.storage()->get_DeltaDeviceCheckTimeMS();
     
     // Value in dB
 //  sgtl5000_1.micGain(15);
@@ -235,19 +234,19 @@ void loop() {
       break;  
   }   
   
-  MTP.loop();  // This is mandatory to be placed in the loop code.
+  if (!MTPpaused) MTP.loop();  // This is mandatory to be placed in the loop code.
 }
 
 void setMTPdeviceChecks(bool nable)
 {
   if (nable)
   {
-    MTP.storage()->set_DeltaDeviceCheckTimeMS(MTPcheckInterval);
+    MTPpaused = false;
     Serial.print("En");
   }
   else
   {
-    MTP.storage()->set_DeltaDeviceCheckTimeMS((uint32_t) -1);
+    MTPpaused = true;
     Serial.print("Dis");
   }
   Serial.println("abled MTP storage device checks");
