@@ -44,6 +44,10 @@ void syncNow() {
   if (task) xTaskNotifyGive(task);
 }
 
+void syncSetTrace(bool on) {
+  if (teensy) teensy->trace = on;
+}
+
 static void setError(const String& e) {
   Serial.println("Sync: " + e);
   std::lock_guard<std::mutex> lock(statusMutex);
@@ -129,8 +133,8 @@ static LinkResult copyRecording(const RemoteFile& remote) {
   setProgress(0, 0, 0);
 
   if (offset < remote.size) {
-    // Busy and timeouts are expected when a guest lifts the handset; the copy resumes later
-    if (r == LinkResult::Error) {
+    // Busy is expected when a guest lifts the handset; the copy resumes later
+    if (r != LinkResult::Busy) {
       setError(String("copying ") + remote.num + " stopped at " + offset + ": " + linkResultName(r) +
                " " + teensy->lastError());
     }
@@ -185,6 +189,10 @@ static uint32_t syncCycle() {
   int pending = todo.size();
   {
     std::lock_guard<std::mutex> lock(statusMutex);
+    if (status.teensyFiles != (int)files.size() || pending) {
+      Serial.printf("Sync: Teensy has %u recordings, %d to copy\n", (unsigned)files.size(), pending);
+    }
+    status.teensyFiles = files.size();
     status.pending = pending;
   }
 

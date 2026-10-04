@@ -6,6 +6,7 @@ struct SyncStatus {
   String teensyMode;          // Ready, Recording, ...
   uint32_t teensyTime = 0;    // Teensy clock now (estimated from the last PONG)
   int32_t lastSyncAgo = -1;   // [s] since the last complete sync, -1 = never
+  int teensyFiles = -1;       // recordings on the Teensy at the last LIST, -1 = no LIST yet
   int pending = 0;            // recordings on the Teensy not yet copied
   uint32_t copyingNum = 0;    // recording being copied right now, if copyingSize > 0
   uint32_t copyingDone = 0;
@@ -20,3 +21,5 @@ SyncStatus syncStatus();
 void syncSetBrowserTime(uint32_t t);
 // Run a sync cycle now instead of waiting for the next one
 void syncNow();
+// Print the protocol traffic on the USB serial monitor
+void syncSetTrace(bool on);

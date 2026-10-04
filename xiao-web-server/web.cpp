@@ -26,6 +26,7 @@ static void handleStatus(AsyncWebServerRequest* req) {
   json += ",\"teensyMode\":\"" + jsonEscape(s.teensyMode) + "\"";
   json += ",\"clockValid\":" + String(clockValid(s.teensyTime) ? "true" : "false");
   json += ",\"lastSyncAgo\":" + String(s.lastSyncAgo);
+  json += ",\"teensyFiles\":" + String(s.teensyFiles);
   json += ",\"pending\":" + String(s.pending);
   json += ",\"copyingNum\":" + String(s.copyingNum);
   json += ",\"copyingDone\":" + String(s.copyingDone);

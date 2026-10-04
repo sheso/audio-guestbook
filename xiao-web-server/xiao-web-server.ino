@@ -8,7 +8,8 @@
  * Board: "XIAO_ESP32S3" (esp32 core by Espressif, 3.x). Libraries: ESPAsyncWebServer and AsyncTCP
  * by ESP32Async.
  *
- * Serial monitor (115200) commands: "status" prints the sync state, "sync" checks the Teensy now.
+ * Serial monitor (115200) commands: "status" prints the sync state, "sync" checks the Teensy now,
+ * "trace on" / "trace off" prints the protocol traffic with the Teensy.
  */
 
 #include "catalog.h"
@@ -24,8 +25,8 @@ static void printStatus() {
   SyncStatus s = syncStatus();
   Serial.printf("Teensy: %s, mode %s, clock %lu (%s)\n", s.teensyOnline ? "online" : "offline",
                 s.teensyMode.c_str(), (unsigned long)s.teensyTime, clockValid(s.teensyTime) ? "valid" : "not set");
-  Serial.printf("Recordings copied: %u, pending: %d, last sync: %ld s ago\n",
-                (unsigned)catalog.snapshot().size(), s.pending, (long)s.lastSyncAgo);
+  Serial.printf("Recordings on the Teensy: %d, copied: %u, pending: %d, last sync: %ld s ago\n",
+                s.teensyFiles, (unsigned)catalog.snapshot().size(), s.pending, (long)s.lastSyncAgo);
   if (s.copyingSize) Serial.printf("Copying %lu: %lu of %lu bytes\n", (unsigned long)s.copyingNum,
                                    (unsigned long)s.copyingDone, (unsigned long)s.copyingSize);
   if (s.lastError.length()) Serial.println("Last error: " + s.lastError);
@@ -60,7 +61,11 @@ void loop() {
     cmd.trim();
     if (cmd == "status") printStatus();
     else if (cmd == "sync") syncNow();
-    else if (cmd.length()) Serial.println("Commands: status, sync");
+    else if (cmd == "trace on" || cmd == "trace off") {
+      syncSetTrace(cmd == "trace on");
+      syncNow();
+    }
+    else if (cmd.length()) Serial.println("Commands: status, sync, trace on, trace off");
   }
   delay(20);
 }

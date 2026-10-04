@@ -33,6 +33,9 @@ public:
   // Last ERR reason, for logging
   const String& lastError() const { return error; }
 
+  // Print every request and reply line (not the binary data) on the USB serial monitor
+  bool trace = false;
+
 private:
   Stream& port;
   uint32_t seq;

@@ -113,6 +113,7 @@ async function loadStatus() {
       else { dot = 'busy'; text = 'Телефон занят'; }
     }
     const parts = [`<span><span class="dot ${dot}"></span>${text}</span>`];
+    if (s.teensyFiles >= 0) parts.push(`<span>На телефоне: ${s.teensyFiles}</span>`);
     if (s.copyingSize) parts.push(`<span>Копирую №${s.copyingNum}: ${Math.floor(100 * s.copyingDone / s.copyingSize)}%</span>`);
     if (s.pending) parts.push(`<span>Ждут копирования: ${s.pending}</span>`);
     else if (s.lastSyncAgo >= 0) parts.push(`<span>Проверено ${ago(s.lastSyncAgo)}</span>`);

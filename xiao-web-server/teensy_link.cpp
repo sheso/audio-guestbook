@@ -23,6 +23,7 @@ void TeensyLink::send(const char* cmd, const String& args) {
   String line = String(cmd) + " " + String(seq);
   if (args.length()) line += " " + args;
   line += "\n";
+  if (trace) Serial.print(">> " + line);
   port.write((const uint8_t*)line.c_str(), line.length());
 }
 
@@ -76,6 +77,7 @@ bool TeensyLink::readReply(String& type, String& rest, uint32_t timeoutMs) {
   uint32_t deadline = millis() + timeoutMs;
   String line;
   while (readLine(line, deadline)) {
+    if (trace) Serial.println("<< " + line);
     char t[8];
     unsigned long replySeq;
     int consumed = 0;
@@ -94,6 +96,7 @@ bool TeensyLink::readReply(String& type, String& rest, uint32_t timeoutMs) {
     rest = r;
     return true;
   }
+  if (trace) Serial.printf("<< (no reply in %lu ms, %d bytes waiting)\n", (unsigned long)timeoutMs, port.available());
   return false;
 }
 
