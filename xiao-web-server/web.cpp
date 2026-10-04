@@ -9,6 +9,19 @@
 #include <memory>
 
 static AsyncWebServer server(80);
+static bool requestLog = false;
+static uint32_t requestCount = 0, lastRequestMs = 0; // written only by the async_tcp task
+static IPAddress lastClient;
+
+void webSetLog(bool on) {
+  requestLog = on;
+}
+
+String webStats() {
+  if (!requestCount) return "HTTP: no requests yet";
+  return "HTTP: " + String(requestCount) + " requests, last " + String((millis() - lastRequestMs) / 1000) +
+         " s ago from " + lastClient.toString();
+}
 
 static String jsonEscape(const String& s) {
   String out;
@@ -163,6 +176,15 @@ static void handleZip(AsyncWebServerRequest* req) {
 }
 
 void webBegin() {
+  server.addMiddleware([](AsyncWebServerRequest* req, ArMiddlewareNext next) {
+    requestCount++;
+    lastRequestMs = millis();
+    lastClient = req->client()->remoteIP();
+    if (requestLog) {
+      Serial.printf("HTTP %s %s %s\n", lastClient.toString().c_str(), req->methodToString(), req->url().c_str());
+    }
+    next();
+  });
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
     req->send(200, "text/html; charset=utf-8", (const uint8_t*)INDEX_HTML, sizeof INDEX_HTML - 1);
   });

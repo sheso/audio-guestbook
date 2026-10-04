@@ -1,11 +1,24 @@
 #pragma once
 
-// Wi-Fi access point (open network, no password)
+// Existing Wi-Fi network to join. Its name and password go in wifi_secrets.h (copy
+// wifi_secrets.example.h), which is not committed. Without it, or when the network cannot be
+// joined within WIFI_CONNECT_TIMEOUT, the XIAO starts its own access point instead.
+#if __has_include("wifi_secrets.h")
+#include "wifi_secrets.h"
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+#endif
+#define WIFI_CONNECT_TIMEOUT 20000 // [ms]
+
+// Own Wi-Fi access point (open network, no password)
 #define AP_SSID "Guestbook"
 #define AP_CHANNEL 6
 #define AP_MAX_CLIENTS 8
 #define MDNS_NAME "guestbook" // http://guestbook.local/
-// Lower transmit power keeps current peaks within the 600mA limit of the Zelo Power Bank
+// Lower transmit power keeps current peaks within the 600mA limit of the Zelo Power Bank. Only used
+// for the own access point: a router may be too far away for it.
 #define WIFI_TX_POWER WIFI_POWER_8_5dBm
 
 // Serial link to the Teensy (see ../xiao_link.ino for the protocol)
