@@ -33,8 +33,8 @@
 // DEFINES
 // Define pins used by Teensy Audio Shield
 #define SDCARD_CS_PIN    10
-#define SDCARD_MOSI_PIN  7
-#define SDCARD_SCK_PIN   14
+#define SDCARD_MOSI_PIN  11
+#define SDCARD_SCK_PIN   13
 // And those used for inputs
 #define HOOK_PIN 0
 #define PLAYBACK_BUTTON_PIN 1
@@ -130,7 +130,7 @@ void setup() {
     // stop here if no SD card, but print a message
     while (1) {
       Serial.println("Unable to access the SD card");
-      delay(500);
+      delay(15000);
     }
   }
     else Serial.println("SD card correctly initialized");
@@ -167,7 +167,7 @@ void loop() {
   switch(mode){
     case Mode::Ready:
       // Falling edge occurs when the handset is lifted --> 611 telephone
-      if (buttonRecord.fallingEdge()) {
+      if (buttonRecord.risingEdge()) {
         Serial.println("Handset lifted");
         mode = Mode::Prompting; print_mode();
       }
@@ -189,7 +189,7 @@ void loop() {
         buttonRecord.update();
         buttonPlay.update();
         // Handset is replaced
-        if(buttonRecord.risingEdge()) {
+        if(buttonRecord.fallingEdge()) {
           playWav1.stop();
           mode = Mode::Ready; print_mode();
           return;
@@ -214,7 +214,7 @@ void loop() {
 
     case Mode::Recording:
       // Handset is replaced
-      if(buttonRecord.risingEdge()){
+      if(buttonRecord.fallingEdge()){
         // Debug log
         Serial.println("Stopping Recording");
         // Stop recording
@@ -381,7 +381,7 @@ void playAllRecordings() {
       buttonRecord.update();
       // Button is pressed again
 //      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.risingEdge()) { 
+      if(buttonPlay.fallingEdge() || buttonRecord.fallingEdge()) {
         playWav1.stop();
         mode = Mode::Ready; print_mode();
         return;
@@ -414,7 +414,7 @@ void playLastRecording() {
       buttonRecord.update();
       // Button is pressed again
 //      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.risingEdge()) {
+      if(buttonPlay.fallingEdge() || buttonRecord.fallingEdge()) {
         playWav1.stop();
         mode = Mode::Ready; print_mode();
         return;
