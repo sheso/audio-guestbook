@@ -62,7 +62,7 @@
 #define BEAT_FILE "beat.wav"
 #define BEAT_GAIN 0.4f        // beat alone
 #define BEAT_GAIN_UNDER 0.3f  // beat under the recording
-#define BEAT_REC_GAIN 8.0f    // recordings are quiet (about -40 dBFS, peaks below -20 dBFS without the end)
+#define BEAT_REC_GAIN 10.0f   // recordings are quiet (about -40 dBFS, peaks below -20 dBFS without the end)
 #define BEAT_CUT_END_MS 1000  // [ms] the end of a recording is the handset being put down: skip it
 #define BEAT_INTRO_MS 2000    // [ms] beat alone before the recording
 #define BEAT_RAMP_MS 500      // [ms] to go between BEAT_GAIN and BEAT_GAIN_UNDER
