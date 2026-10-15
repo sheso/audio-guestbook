@@ -6,7 +6,8 @@
  * 
  * When handset is lifted, a pre-recorded greeting message is played, followed by a tone.
  * Then, recording starts, and continues until the handset is replaced.
- * Playback button allows all messages currently saved on SD card through earpiece 
+ * Playback button allows all messages currently saved on SD card through earpiece
+ * Dialling a number from dialTracks plays its file from the SD card
  * 
  * Files are saved on SD card as 44.1kHz, 16-bit, mono signed integer RAW audio format 
  * --> changed this to WAV recording, DD4WH 2022_07_31
@@ -46,6 +47,26 @@
 #define DIAL_DIGIT_TIMEOUT 5000 // [ms] forget a partially dialled code after this pause
 #define DIAL_DISCARD_MS 5000 // [ms] recordings shorter than this are deleted when dialling starts
 #define SECRET_CODE "1337" // dial this to hear the last recorded message
+// Numbers that play a file from the SD card. No number may be the start of another one,
+// so a track starts as soon as its last digit is dialled
+struct DialTrack { const char *number; const char *file; };
+const DialTrack dialTracks[] = {
+  {"4242",                 "reklama-4242.wav"},
+  {"01189998819991197253", "emergency-0118.wav"},
+  {"67",                   "gazan-67.wav"},
+  {"312",                  "gorod312-vne-zony.wav"},
+  {"88005553535",          "zaimy-88005553535.wav"},
+  {"5055034455",           "better-call-saul.wav"},
+  {"5552368",              "ghostbusters-555-2368.wav"},
+  {"69",                   "katya-lel-musi-pusi.wav"},
+  {"131093",               "Sasha-birthday-131093.wav"},
+  {"13101993",             "Sasha-birthday-131093.wav"},
+  {"271192",               "Sonya-birthday-271192.wav"},
+  {"27111992",             "Sonya-birthday-271192.wav"},
+  {"161026",               "Wedding-date-161026.wav"},
+  {"16102026",             "Wedding-date-161026.wav"},
+  {SECRET_CODE,            nullptr}, // last recording
+};
 #define DEBUG_DIAL // print every change on the dial contacts - remove once the dial works
 
 #define noINSTRUMENT_SD_WRITE
@@ -79,7 +100,7 @@ Bounce dialPulse = Bounce(DIAL_PULSE_PIN, 5);
 Bounce dialActive = Bounce(DIAL_ACTIVE_PIN, 10);
 
 // Dialling state
-char dialled[8];
+char dialled[24];
 uint8_t numDialled = 0;
 uint8_t pulseCount = 0;
 elapsedMillis sinceLastDigit;
@@ -295,15 +316,24 @@ void loop() {
         resetDial();
         mode = Mode::Ready; print_mode();
       }
-      else if (numDialled >= strlen(SECRET_CODE)) {
-        bool match = strncmp(dialled, SECRET_CODE, strlen(SECRET_CODE)) == 0;
-        resetDial();
-        if (match) {
-          Serial.println("Secret code dialled");
-          playLastRecording();
+      else if (numDialled > 0 && pulseCount == 0) {
+        const DialTrack *track = nullptr;
+        bool possible = false; // the digits so far start some number
+        for (const DialTrack &t : dialTracks) {
+          if (numDialled <= strlen(t.number) && strncmp(dialled, t.number, numDialled) == 0) {
+            possible = true;
+            if (numDialled == strlen(t.number)) track = &t;
+          }
         }
-        else {
-          Serial.println("Wrong code");
+        if (track) {
+          Serial.printf("Number %s dialled\n", track->number);
+          resetDial();
+          if (track->file) playDialTrack(track->file);
+          else playLastRecording();
+        }
+        else if (!possible) {
+          Serial.printf("Wrong number %.*s\n", numDialled, dialled);
+          resetDial();
           error_Beep();
         }
       }
@@ -565,6 +595,37 @@ void playLastRecording() {
   end_Beep();
 }
 
+
+// Play a file for a dialled number. Dialling again stops it and starts a new number,
+// putting the handset down ends the call
+void playDialTrack(const char *file) {
+  if (!SD.exists(file)) {
+    Serial.printf("%s is not on the SD card\n", file);
+    error_Beep();
+    return;
+  }
+  Serial.print("Now playing ");
+  Serial.println(file);
+  playWav1.play(file);
+  mode = Mode::Playing; print_mode();
+  while (!playWav1.isStopped()) {
+    buttonRecord.update();
+    buttonPlay.update();
+    updateDial();
+    if (buttonRecord.fallingEdge()) {
+      playWav1.stop();
+      resetDial();
+      mode = Mode::Ready; print_mode();
+      return;
+    }
+    if (dialStarted()) {
+      playWav1.stop();
+      break;
+    }
+  }
+  // The handset is still lifted: wait for the next number
+  startDialing();
+}
 
 // Retrieve the current time from Teensy built-in RTC
 time_t getTeensy3Time(){
