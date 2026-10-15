@@ -43,6 +43,7 @@
 #define DIAL_ACTIVE_PIN 3
 // Resting levels of both dial contacts are measured at boot, so either wiring works
 #define DIAL_DIGIT_GAP 200 // [ms] no pulses for this long means the digit is complete (pulses are ~100ms apart)
+#define DIAL_PULSE_MIN 35 // [ms] shorter pulses are contact glitches (real ones last ~62ms, glitches 5-23ms)
 #define DIAL_NUMBER_GAP 4000 // [ms] a pause this long ends a number that is not in dialTracks
 #define DIAL_DISCARD_MS 5000 // [ms] recordings shorter than this are deleted when dialling starts
 // Any other number is an easter egg the guests record themselves into "egg-<number>.wav":
@@ -53,7 +54,9 @@
 #define EGG_DISCARD_MS 5000 // [ms] shorter eggs are deleted when the handset is put down
 #define SECRET_CODE "1337" // dial this to hear the last recorded message
 // Numbers that play a file from the SD card. No number may be the start of another one,
-// so a track starts as soon as its last digit is dialled
+// so a track starts as soon as its last digit is dialled.
+// This dial often sends two pulses for a leading "1", so a number starting with "2" also plays the
+// track of the same number with a leading "1" (and easter eggs fall back between "1..." and "2...").
 struct DialTrack { const char *number; const char *file; };
 const DialTrack dialTracks[] = {
   {"4242",                 "reklama-4242.wav"},
@@ -113,6 +116,7 @@ uint8_t numDialled = 0;
 uint8_t pulseCount = 0;
 elapsedMillis sinceLastDigit;
 elapsedMillis sinceLastPulse;
+elapsedMillis sincePulseStart;
 uint8_t dialActiveRest; // pin 3 level while the dial is at rest
 uint8_t dialPulseRest;  // pin 2 level between pulses
 
@@ -171,7 +175,7 @@ void setup() {
   // Define which input on the audio shield to use (AUDIO_INPUT_LINEIN / AUDIO_INPUT_MIC)
   sgtl5000_1.inputSelect(AUDIO_INPUT_MIC);
   //sgtl5000_1.adcHighPassFilterDisable(); //
-  sgtl5000_1.volume(0.95);
+  sgtl5000_1.volume(0.85); // 10% quieter than the 0.95 we started with
 
   mixer.gain(0, 1.0f);
   mixer.gain(1, 1.0f);
@@ -321,12 +325,21 @@ void loop() {
       }
       else if (numDialled > 0 && pulseCount == 0) {
         const DialTrack *track = nullptr;
+        bool leadingOne = false; // matched with the leading "2" read as "1"
         for (const DialTrack &t : dialTracks) {
-          if (numDialled == strlen(t.number) && strncmp(dialled, t.number, numDialled) == 0) track = &t;
+          if (numDialled != strlen(t.number) || strncmp(dialled + 1, t.number + 1, numDialled - 1) != 0) continue;
+          if (dialled[0] == t.number[0]) track = &t;
+          else if (!track && dialled[0] == '2' && t.number[0] == '1') {
+            track = &t;
+            leadingOne = true;
+          }
         }
         if (track) {
           Serial.printf("Number %s dialled\n", track->number);
-          logDial(track->file ? track->file : "last recording");
+          char result[64];
+          snprintf(result, sizeof result, "%s%s", leadingOne ? "leading 2 read as 1: " : "",
+                   track->file ? track->file : "last recording");
+          logDial(result);
           resetDial();
           if (track->file) playDialTrack(track->file);
           else playLastRecording();
@@ -373,8 +386,11 @@ void startDialing() {
 void updateDial() {
   dialPulse.update();
   dialActive.update();
-  // A pulse starts when the pulse contact leaves its resting level
-  bool pulse = (dialPulseRest == LOW) ? dialPulse.risingEdge() : dialPulse.fallingEdge();
+  // A pulse starts when the pulse contact leaves its resting level, and counts when it comes back
+  // after at least DIAL_PULSE_MIN
+  bool pulseStart = (dialPulseRest == LOW) ? dialPulse.risingEdge() : dialPulse.fallingEdge();
+  bool pulseEnd = (dialPulseRest == LOW) ? dialPulse.fallingEdge() : dialPulse.risingEdge();
+  if (pulseStart) sincePulseStart = 0;
 
 #if defined(DEBUG_DIAL)
   if (dialActive.risingEdge() || dialActive.fallingEdge())
@@ -384,11 +400,16 @@ void updateDial() {
     Serial.printf("%lu ms: pulse (pin %d) -> %d\n", millis(), DIAL_PULSE_PIN, dialPulse.read());
 #endif // defined(DEBUG_DIAL)
 
-  if (pulse) {
-    pulseCount++;
-    sinceLastPulse = 0;
+  if (pulseEnd) {
+    if (sincePulseStart >= DIAL_PULSE_MIN) {
+      pulseCount++;
+      sinceLastPulse = 0;
+    }
+    else {
+      Serial.printf("Ignored a %lu ms glitch on the pulse contact\n", (unsigned long)sincePulseStart);
+    }
   }
-  else if (pulseCount > 0 && sinceLastPulse > DIAL_DIGIT_GAP && !dialIsActive()) {
+  else if (pulseCount > 0 && sinceLastPulse > DIAL_DIGIT_GAP && dialPulse.read() == dialPulseRest && !dialIsActive()) {
     if (pulseCount >= 1 && pulseCount <= 10 && numDialled < sizeof dialled) {
       digitPause[numDialled] = min((unsigned long)sinceLastDigit / 100, 9999UL);
       dialled[numDialled++] = '0' + (pulseCount % 10); // 10 pulses means "0"
@@ -579,7 +600,19 @@ void playDialTrack(const char *file) {
 void dialEasterEgg() {
   snprintf(eggFile, sizeof eggFile, "egg-%.*s.wav", numDialled, dialled);
   bool exists = SD.exists(eggFile);
-  logDial(exists ? "easter egg played" : "no easter egg, offered to record one");
+  if (!exists && (dialled[0] == '1' || dialled[0] == '2')) {
+    // The leading digit may be misread (see dialTracks): use the egg of the other one if there is one
+    char other[sizeof eggFile];
+    strcpy(other, eggFile);
+    other[4] = dialled[0] == '1' ? '2' : '1';
+    if (SD.exists(other)) {
+      strcpy(eggFile, other);
+      exists = true;
+      logDial(dialled[0] == '2' ? "leading 2 read as 1: easter egg played" : "leading 1 read as 2: easter egg played");
+    }
+    else logDial("no easter egg, offered to record one");
+  }
+  else logDial(exists ? "easter egg played" : "no easter egg, offered to record one");
   resetDial();
   if (exists) {
     playDialTrack(eggFile);
