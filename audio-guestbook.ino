@@ -7,7 +7,8 @@
  * When handset is lifted, a pre-recorded greeting message is played, followed by a tone.
  * Then, recording starts, and continues until the handset is replaced.
  * Playback button allows all messages currently saved on SD card through earpiece
- * Dialling a number from dialTracks plays its file from the SD card
+ * Dialling a number from dialTracks plays its file from the SD card, any other number plays
+ * the easter egg a guest recorded for it, or invites the guest to record one
  * 
  * Files are saved on SD card as 44.1kHz, 16-bit, mono signed integer RAW audio format 
  * --> changed this to WAV recording, DD4WH 2022_07_31
@@ -44,8 +45,12 @@
 #define DIAL_ACTIVE_PIN 3
 // Resting levels of both dial contacts are measured at boot, so either wiring works
 #define DIAL_DIGIT_GAP 200 // [ms] no pulses for this long means the digit is complete (pulses are ~100ms apart)
-#define DIAL_DIGIT_TIMEOUT 5000 // [ms] forget a partially dialled code after this pause
+#define DIAL_NUMBER_GAP 4000 // [ms] a pause this long ends a number that is not in dialTracks
 #define DIAL_DISCARD_MS 5000 // [ms] recordings shorter than this are deleted when dialling starts
+// Any other number is an easter egg the guests record themselves into "egg-<number>.wav":
+// the first caller hears NO_EGG_PROMPT and leaves the egg, later callers hear it
+#define NO_EGG_PROMPT "no-easter.wav"
+#define EGG_DISCARD_MS 5000 // [ms] shorter eggs are deleted when the handset is put down
 #define SECRET_CODE "1337" // dial this to hear the last recorded message
 // Numbers that play a file from the SD card. No number may be the start of another one,
 // so a track starts as soon as its last digit is dialled
@@ -88,7 +93,10 @@ AudioConnection patchCord5(i2s2, 0, queue1, 0); // mic input to queue (L)
 AudioControlSGTL5000      sgtl5000_1;
 
 // Filename to save audio recording on SD card
-char filename[15];
+char filename[40];
+// Prompt played before recording, and the easter egg file to record ("" for a guestbook message)
+const char *promptFile = "greeting.wav";
+char eggFile[40] = "";
 // The file object itself
 File frec;
 
@@ -227,6 +235,8 @@ void loop() {
       if (buttonRecord.risingEdge()) {
         Serial.println("Handset lifted");
         resetDial();
+        promptFile = "greeting.wav";
+        eggFile[0] = '\0';
         mode = Mode::Prompting; print_mode();
       }
       else if(buttonPlay.fallingEdge()) {
@@ -242,8 +252,8 @@ void loop() {
         startDialing();
         break;
       }
-      // Play the greeting inviting them to record their message
-      playWav1.play("greeting.wav");    
+      // Play the greeting (or the "no egg yet" prompt) inviting them to record their message
+      playWav1.play(promptFile);
       // Wait until the  message has finished playing
 //      while (playWav1.isPlaying()) {
       while (!playWav1.isStopped()) {
@@ -291,6 +301,11 @@ void loop() {
         Serial.println("Stopping Recording");
         // Stop recording
         stopRecording();
+        if (eggFile[0] && recByteSaved < EGG_DISCARD_MS * byteRate / 1000) {
+          SD.remove(filename);
+          Serial.print("Discarded short easter egg ");
+          Serial.println(filename);
+        }
         // Play audio tone to confirm recording has ended
         end_Beep();
       }
@@ -318,12 +333,8 @@ void loop() {
       }
       else if (numDialled > 0 && pulseCount == 0) {
         const DialTrack *track = nullptr;
-        bool possible = false; // the digits so far start some number
         for (const DialTrack &t : dialTracks) {
-          if (numDialled <= strlen(t.number) && strncmp(dialled, t.number, numDialled) == 0) {
-            possible = true;
-            if (numDialled == strlen(t.number)) track = &t;
-          }
+          if (numDialled == strlen(t.number) && strncmp(dialled, t.number, numDialled) == 0) track = &t;
         }
         if (track) {
           Serial.printf("Number %s dialled\n", track->number);
@@ -331,15 +342,10 @@ void loop() {
           if (track->file) playDialTrack(track->file);
           else playLastRecording();
         }
-        else if (!possible) {
-          Serial.printf("Wrong number %.*s\n", numDialled, dialled);
-          resetDial();
-          error_Beep();
+        else if (numDialled == sizeof dialled || (!dialIsActive() && sinceLastDigit > DIAL_NUMBER_GAP)) {
+          // The guest stopped dialling a number that is not in dialTracks
+          dialEasterEgg();
         }
-      }
-      else if (numDialled > 0 && !dialStarted() && sinceLastDigit > DIAL_DIGIT_TIMEOUT) {
-        Serial.println("Dialling timed out");
-        resetDial();
       }
       break;
 
@@ -433,9 +439,11 @@ void startRecording() {
   worstSDwrite = 0;
   printNext = 0;
 #endif // defined(INSTRUMENT_SD_WRITE)
-  // Find the first available file number
-//  for (uint8_t i=0; i<9999; i++) { // BUGFIX uint8_t overflows if it reaches 255  
-  for (uint16_t i=0; i<9999; i++) {   
+  // An easter egg has its own name, a guestbook message takes the first available file number
+  if (eggFile[0]) strcpy(filename, eggFile);
+  else
+//  for (uint8_t i=0; i<9999; i++) { // BUGFIX uint8_t overflows if it reaches 255
+  for (uint16_t i=0; i<9999; i++) {
     // Format the counter as a five-digit number with leading zeroes, followed by file extension
     snprintf(filename, 11, " %05d.wav", i);
     // Create if does not exist, do not open existing, write, sync after write
@@ -625,6 +633,20 @@ void playDialTrack(const char *file) {
   }
   // The handset is still lifted: wait for the next number
   startDialing();
+}
+
+// Play the easter egg recorded for the dialled number, or offer to record one
+void dialEasterEgg() {
+  snprintf(eggFile, sizeof eggFile, "egg-%.*s.wav", numDialled, dialled);
+  resetDial();
+  if (SD.exists(eggFile)) {
+    playDialTrack(eggFile);
+  }
+  else {
+    Serial.printf("No %s yet, offering to record it\n", eggFile);
+    promptFile = NO_EGG_PROMPT;
+    mode = Mode::Prompting; print_mode();
+  }
 }
 
 // Retrieve the current time from Teensy built-in RTC
