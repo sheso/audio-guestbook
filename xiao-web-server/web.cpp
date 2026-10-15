@@ -142,8 +142,19 @@ static void handleRecording(AsyncWebServerRequest* req) {
   }
   uint32_t len = rec.size ? end - start + 1 : 0;
 
+  auto sent = std::make_shared<uint32_t>(0);
+  if (requestLog) {
+    Serial.printf("HTTP   rec %lu, %s, bytes %lu-%lu of %lu\n", (unsigned long)rec.num,
+                  partial ? req->getHeader("Range")->value().c_str() : "no range", (unsigned long)start,
+                  (unsigned long)end, (unsigned long)rec.size);
+    uint32_t num = rec.num, started = millis();
+    req->onDisconnect([sent, num, len, started]() {
+      Serial.printf("HTTP   rec %lu: closed after %lu of %lu bytes, %lu ms\n", (unsigned long)num,
+                    (unsigned long)*sent, (unsigned long)len, (unsigned long)(millis() - started));
+    });
+  }
   AsyncWebServerResponse* res = req->beginResponse(
-      "audio/wav", len, [file, start, header](uint8_t* buf, size_t maxLen, size_t index) -> size_t {
+      "audio/wav", len, [file, start, sent, header](uint8_t* buf, size_t maxLen, size_t index) -> size_t {
         uint32_t pos = start + index;
         if (file->position() != pos) file->seek(pos);
         int n = file->read(buf, maxLen);
@@ -151,6 +162,7 @@ static void handleRecording(AsyncWebServerRequest* req) {
         if (header) {
           for (uint32_t i = pos; i < WAV_HEADER_SIZE && i < pos + n; i++) buf[i - pos] = header[i];
         }
+        *sent = index + n;
         return n;
       });
   res->addHeader("Accept-Ranges", "bytes");
