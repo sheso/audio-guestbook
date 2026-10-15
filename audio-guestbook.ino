@@ -57,7 +57,19 @@
 // so a track starts as soon as its last digit is dialled.
 // This dial often sends two pulses for a leading "1", so a number starting with "2" also plays the
 // track of the same number with a leading "1" (and easter eggs fall back between "1..." and "2...").
+// Dial 495 to hear the last recording over BEAT_FILE: the beat plays alone for BEAT_INTRO_MS, goes down
+// to BEAT_GAIN_UNDER for the recording, comes back up after it and fades out
+#define BEAT_FILE "beat.wav"
+#define BEAT_GAIN 0.4f        // beat alone
+#define BEAT_GAIN_UNDER 0.3f  // beat under the recording
+#define BEAT_REC_GAIN 8.0f    // recordings are quiet (about -40 dBFS, peaks below -20 dBFS without the end)
+#define BEAT_CUT_END_MS 1000  // [ms] the end of a recording is the handset being put down: skip it
+#define BEAT_INTRO_MS 2000    // [ms] beat alone before the recording
+#define BEAT_RAMP_MS 500      // [ms] to go between BEAT_GAIN and BEAT_GAIN_UNDER
+#define BEAT_TAIL_MS 2000     // [ms] after the recording before the fade out starts
+#define BEAT_FADE_MS 3000     // [ms] fade out
 struct DialTrack { const char *number; const char *file; };
+const char LAST_ON_BEAT[] = "last recording on the beat"; // dialTracks file for playLastOnBeat()
 const DialTrack dialTracks[] = {
   {"4242",                 "reklama-4242.wav"},
   {"01189998819991197253", "emergency-0118.wav"},
@@ -74,6 +86,7 @@ const DialTrack dialTracks[] = {
   {"161026",               "Wedding-date-161026.wav"},
   {"16102026",             "Wedding-date-161026.wav"},
   {SECRET_CODE,            nullptr}, // last recording
+  {"495",                  LAST_ON_BEAT},
 };
 #define DEBUG_DIAL // print every change on the dial contacts - remove once the dial works
 
@@ -90,6 +103,8 @@ AudioMixer4                 mixer; // Allows merging several inputs to same outp
 AudioOutputI2S              i2s1; // I2S interface to Speaker/Line Out on Audio shield
 AudioConnection patchCord1(waveform1, 0, mixer, 0); // wave to mixer 
 AudioConnection patchCord3(playWav1, 0, mixer, 1); // wav file playback mixer
+AudioPlaySdWavX              playWav2; // beat under the last recording, see BEAT_FILE
+AudioConnection patchCord7(playWav2, 0, mixer, 2); // beat to mixer
 AudioConnection patchCord4(mixer, 0, i2s1, 0); // mixer output to speaker (L)
 AudioConnection patchCord6(mixer, 0, i2s1, 1); // mixer output to speaker (R)
 AudioConnection patchCord5(i2s2, 0, queue1, 0); // mic input to queue (L)
@@ -179,6 +194,7 @@ void setup() {
 
   mixer.gain(0, 1.0f);
   mixer.gain(1, 1.0f);
+  mixer.gain(2, 0.0f); // set by playLastOnBeat()
 
   // Play a beep to indicate system is online
   waveform1.begin(beep_volume, 440, WAVEFORM_SINE);
@@ -341,8 +357,9 @@ void loop() {
                    track->file ? track->file : "last recording");
           logDial(result);
           resetDial();
-          if (track->file) playDialTrack(track->file);
-          else playLastRecording();
+          if (!track->file) playLastRecording();
+          else if (track->file == LAST_ON_BEAT) playLastOnBeat();
+          else playDialTrack(track->file);
         }
         else if (numDialled == sizeof dialled || (!dialIsActive() && sinceLastDigit > DIAL_NUMBER_GAP)) {
           // The guest stopped dialling a number that is not in dialTracks
@@ -565,6 +582,90 @@ void playLastRecording() {
   end_Beep();
 }
 
+
+// Name of the last guestbook recording; returns false if there is none
+bool findLastRecording(char *name, size_t size) {
+  for (uint16_t i = 0; i < 9999; i++) {
+    snprintf(name, size, " %05d.wav", i);
+    if (!SD.exists(name)) {
+      if (i == 0) return false;
+      snprintf(name, size, " %05d.wav", i - 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+static float lerp(float from, float to, uint32_t ms, uint32_t duration) {
+  return ms >= duration ? to : from + (to - from) * ms / duration;
+}
+
+// The last recording over the beat (see BEAT_FILE). Like playDialTrack(), dialling again stops it and
+// putting the handset down ends the call
+void playLastOnBeat() {
+  char rec[16];
+  if (!findLastRecording(rec, sizeof rec) || !SD.exists(BEAT_FILE)) {
+    Serial.println("No recording or no " BEAT_FILE " on the SD card");
+    error_Beep();
+    return;
+  }
+  Serial.printf("Now playing%s on the beat\n", rec);
+  mode = Mode::Playing; print_mode();
+  mixer.gain(2, BEAT_GAIN);
+  playWav2.play(BEAT_FILE);
+  elapsedMillis t;
+  bool recStarted = false;
+  uint32_t recEnded = 0; // t when the recording ended, 0 while it has not
+  bool hungUp = false;
+  while (true) {
+    buttonRecord.update();
+    updateDial();
+    if (buttonRecord.fallingEdge()) {
+      hungUp = true;
+      break;
+    }
+    if (dialStarted()) break;
+    if (playWav2.isStopped()) playWav2.play(BEAT_FILE); // loop the beat under long recordings
+
+    float gain;
+    if (!recStarted) {
+      gain = t + BEAT_RAMP_MS < BEAT_INTRO_MS ? BEAT_GAIN
+           : lerp(BEAT_GAIN, BEAT_GAIN_UNDER, t + BEAT_RAMP_MS - BEAT_INTRO_MS, BEAT_RAMP_MS);
+      if (t >= BEAT_INTRO_MS) {
+        mixer.gain(1, BEAT_REC_GAIN);
+        playWav1.play(rec);
+        recStarted = true;
+      }
+    }
+    else if (!recEnded) {
+      gain = BEAT_GAIN_UNDER;
+      uint32_t length = playWav1.lengthMillis(); // 0 until the header has been read
+      if (length > BEAT_CUT_END_MS && playWav1.positionMillis() + BEAT_CUT_END_MS >= length) playWav1.stop();
+      if (playWav1.isStopped()) recEnded = t;
+    }
+    else if (t - recEnded < BEAT_TAIL_MS) {
+      gain = lerp(BEAT_GAIN_UNDER, BEAT_GAIN, t - recEnded, BEAT_RAMP_MS);
+    }
+    else if (t - recEnded < BEAT_TAIL_MS + BEAT_FADE_MS) {
+      gain = lerp(BEAT_GAIN, 0, t - recEnded - BEAT_TAIL_MS, BEAT_FADE_MS);
+    }
+    else {
+      break; // faded out
+    }
+    mixer.gain(2, gain);
+  }
+  playWav1.stop();
+  playWav2.stop();
+  mixer.gain(1, 1.0f);
+  mixer.gain(2, 0);
+  if (hungUp) {
+    resetDial();
+    mode = Mode::Ready; print_mode();
+  }
+  else {
+    startDialing(); // the handset is still lifted: wait for the next number
+  }
+}
 
 // Play a file for a dialled number. Dialling again stops it and starts a new number,
 // putting the handset down ends the call
