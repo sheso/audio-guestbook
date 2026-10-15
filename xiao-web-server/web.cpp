@@ -97,6 +97,24 @@ static bool parseRange(const String& header, uint32_t size, uint32_t& start, uin
   return start <= end && start < size;
 }
 
+#define WAV_HEADER_SIZE 44
+
+// The Teensy sketch used to store a "data" chunk size 2 bytes larger than the file, and Safari stops
+// with an error at the end of such a file. Returns the header with both sizes matching the file.
+static std::shared_ptr<uint8_t[]> fixedWavHeader(File& file, uint32_t size) {
+  std::shared_ptr<uint8_t[]> h(new uint8_t[WAV_HEADER_SIZE]);
+  if (size < WAV_HEADER_SIZE || file.read(h.get(), WAV_HEADER_SIZE) != WAV_HEADER_SIZE ||
+      memcmp(h.get(), "RIFF", 4) || memcmp(h.get() + 8, "WAVE", 4) || memcmp(h.get() + 36, "data", 4)) {
+    return nullptr;
+  }
+  auto put32 = [&](int i, uint32_t v) {
+    for (int b = 0; b < 4; b++) h[i + b] = v >> (8 * b);
+  };
+  put32(4, size - 8);
+  put32(40, size - WAV_HEADER_SIZE);
+  return h;
+}
+
 // Serves one recording, with Range support (Safari needs it to play and seek audio)
 static void handleRecording(AsyncWebServerRequest* req) {
   Recording rec;
@@ -109,6 +127,7 @@ static void handleRecording(AsyncWebServerRequest* req) {
     req->send(500, "text/plain", "cannot open the file");
     return;
   }
+  std::shared_ptr<uint8_t[]> header = fixedWavHeader(*file, rec.size);
 
   uint32_t start = 0, end = rec.size - 1;
   bool partial = false;
@@ -124,10 +143,15 @@ static void handleRecording(AsyncWebServerRequest* req) {
   uint32_t len = rec.size ? end - start + 1 : 0;
 
   AsyncWebServerResponse* res = req->beginResponse(
-      "audio/wav", len, [file, start](uint8_t* buf, size_t maxLen, size_t index) -> size_t {
-        if (file->position() != start + index) file->seek(start + index);
+      "audio/wav", len, [file, start, header](uint8_t* buf, size_t maxLen, size_t index) -> size_t {
+        uint32_t pos = start + index;
+        if (file->position() != pos) file->seek(pos);
         int n = file->read(buf, maxLen);
-        return n > 0 ? n : 0;
+        if (n <= 0) return 0;
+        if (header) {
+          for (uint32_t i = pos; i < WAV_HEADER_SIZE && i < pos + n; i++) buf[i - pos] = header[i];
+        }
+        return n;
       });
   res->addHeader("Accept-Ranges", "bytes");
   if (partial) {

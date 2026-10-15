@@ -605,8 +605,8 @@ void writeOutHeader() { // update WAV header with final filesize/datasize
 
 //  NumSamples = (recByteSaved*8)/bitsPerSample/numChannels;
 //  Subchunk2Size = NumSamples*numChannels*bitsPerSample/8; // number of samples x number of channels x number of bytes per sample
-  Subchunk2Size = recByteSaved - 42; // because we didn't make space for the header to start with! Lose 21 samples...
-  ChunkSize = Subchunk2Size + 34; // was 36;
+  Subchunk2Size = recByteSaved - 44; // because we didn't make space for the header to start with! Lose 22 samples...
+  ChunkSize = Subchunk2Size + 36; // file size - 8
   frec.seek(0);
   frec.write("RIFF");
   byte1 = ChunkSize & 0xff;
