@@ -38,6 +38,10 @@ h1 { font-size: 24px; margin: 0 0 4px; }
 .svc-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
 h2 { font-size: 18px; margin: 0; }
 .link { background: none; border: 0; color: var(--accent); font: inherit; font-size: 14px; cursor: pointer; padding: 4px; }
+.log li { display: block; padding: 8px 12px; }
+.log .num { font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.log .meta { font-variant-numeric: tabular-nums; }
+.svc-head.second { margin-top: 18px; }
 dialog {
   border: 0; border-radius: 14px; padding: 20px; width: min(340px, calc(100% - 32px));
   background: var(--card); color: var(--text);
@@ -107,6 +111,8 @@ audio { width: 100%; }
   <section id="service" hidden>
     <div class="svc-head"><h2>Пасхалки</h2><button class="link" id="svcClose">Закрыть</button></div>
     <div id="eggs"></div>
+    <div class="svc-head second"><h2>Журнал набора</h2></div>
+    <div id="dials"></div>
   </section>
   <a class="zip disabled" id="zip" href="/guestbook.zip" download>Скачать всё<small></small></a>
   <div id="list"></div>
@@ -236,11 +242,43 @@ async function loadEggs() {
     </li>`).join('') + '</ul>';
   return true;
 }
+// Dial log from the Teensy: time, digits, pause before each digit [s], result (tab-separated lines)
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function dialResult(r) {
+  let m;
+  if (r === 'last recording') return 'последняя запись (1337)';
+  if (r === 'easter egg played') return 'сыграла пасхалка';
+  if (r === 'no easter egg, offered to record one') return 'пасхалки нет, предложено записать';
+  if (r === 'hung up before the number was complete') return 'трубку положили, номер не закончен';
+  if ((m = r.match(/^ignored dial movement, (\d+) pulses$/))) return `не засчитано: ${m[1]} импульсов`;
+  if (r.endsWith('.wav')) return 'трек ' + r;
+  return r;
+}
+async function loadDials() {
+  let text;
+  try {
+    const res = await fetch('/api/dials');
+    if (!res.ok) return;
+    text = await res.text();
+  } catch (e) { return; }
+  const lines = text.split('\n').filter(l => l).reverse(); // newest first
+  $('dials').innerHTML = !lines.length ? '<div class="empty">Номеров пока не набирали</div>' :
+    '<ul class="log">' + lines.map(l => {
+      const [time, number, pauses, result] = l.split('\t');
+      return `<li><div class="num">${esc(number || '')}</div>
+        <div class="meta">${esc(time || '')} · ${esc(dialResult(result || ''))}</div>
+        ${pauses ? `<div class="meta">паузы перед цифрами, с: ${esc(pauses)}</div>` : ''}</li>`;
+    }).join('') + '</ul>';
+}
+
 function showService(on) {
   $('service').hidden = !on;
   $('tool').classList.toggle('on', on);
   clearInterval(eggsTimer);
-  if (on) eggsTimer = setInterval(loadEggs, 10000);
+  if (on) {
+    loadDials();
+    eggsTimer = setInterval(() => { loadEggs(); loadDials(); }, 10000);
+  }
 }
 $('tool').addEventListener('click', async () => {
   if (!$('service').hidden) { showService(false); return; }

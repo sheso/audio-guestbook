@@ -48,6 +48,8 @@
 // Any other number is an easter egg the guests record themselves into "egg-<number>.wav":
 // the first caller hears NO_EGG_PROMPT and leaves the egg, later callers hear it
 #define NO_EGG_PROMPT "no-easter.wav"
+// Every dialled number and what it did is appended to this file, the XIAO shows it in the service view
+#define DIAL_LOG_FILE "dials.log"
 #define EGG_DISCARD_MS 5000 // [ms] shorter eggs are deleted when the handset is put down
 #define SECRET_CODE "1337" // dial this to hear the last recorded message
 // Numbers that play a file from the SD card. No number may be the start of another one,
@@ -106,6 +108,7 @@ Bounce dialActive = Bounce(DIAL_ACTIVE_PIN, 10);
 
 // Dialling state
 char dialled[24];
+uint16_t digitPause[24]; // [0.1 s] pause before each digit, for the dial log
 uint8_t numDialled = 0;
 uint8_t pulseCount = 0;
 elapsedMillis sinceLastDigit;
@@ -312,6 +315,7 @@ void loop() {
     case Mode::Dialing:
       // Handset is replaced
       if (buttonRecord.fallingEdge()) {
+        if (numDialled > 0) logDial("hung up before the number was complete");
         resetDial();
         mode = Mode::Ready; print_mode();
       }
@@ -322,6 +326,7 @@ void loop() {
         }
         if (track) {
           Serial.printf("Number %s dialled\n", track->number);
+          logDial(track->file ? track->file : "last recording");
           resetDial();
           if (track->file) playDialTrack(track->file);
           else playLastRecording();
@@ -385,6 +390,7 @@ void updateDial() {
   }
   else if (pulseCount > 0 && sinceLastPulse > DIAL_DIGIT_GAP && !dialIsActive()) {
     if (pulseCount >= 1 && pulseCount <= 10 && numDialled < sizeof dialled) {
+      digitPause[numDialled] = min((unsigned long)sinceLastDigit / 100, 9999UL);
       dialled[numDialled++] = '0' + (pulseCount % 10); // 10 pulses means "0"
       sinceLastDigit = 0;
       Serial.printf("Dialled digit %c (%d pulses), number so far: %.*s\n",
@@ -392,6 +398,9 @@ void updateDial() {
     }
     else if (pulseCount > 0) {
       Serial.printf("Ignored dial movement with %d pulses\n", pulseCount);
+      char result[40];
+      snprintf(result, sizeof result, "ignored dial movement, %d pulses", pulseCount);
+      logDial(result);
     }
     pulseCount = 0;
   }
@@ -569,14 +578,34 @@ void playDialTrack(const char *file) {
 // Play the easter egg recorded for the dialled number, or offer to record one
 void dialEasterEgg() {
   snprintf(eggFile, sizeof eggFile, "egg-%.*s.wav", numDialled, dialled);
+  bool exists = SD.exists(eggFile);
+  logDial(exists ? "easter egg played" : "no easter egg, offered to record one");
   resetDial();
-  if (SD.exists(eggFile)) {
+  if (exists) {
     playDialTrack(eggFile);
   }
   else {
     Serial.printf("No %s yet, offering to record it\n", eggFile);
     promptFile = NO_EGG_PROMPT;
     mode = Mode::Prompting; print_mode();
+  }
+}
+
+// Appends a line to DIAL_LOG_FILE: time, digits so far, pause before each digit [s], result (tab-separated)
+void logDial(const char *result) {
+  char line[256];
+  int n = snprintf(line, sizeof line, "%04d-%02d-%02d %02d:%02d:%02d\t%.*s\t", year(), month(), day(),
+                   hour(), minute(), second(), numDialled, numDialled ? dialled : "-");
+  for (uint8_t i = 0; i < numDialled && n < (int)sizeof line - 8; i++) {
+    n += snprintf(line + n, sizeof line - n, "%s%u.%u", i ? " " : "", digitPause[i] / 10, digitPause[i] % 10);
+  }
+  snprintf(line + n, sizeof line - n, "\t%s\n", result);
+  Serial.print("Dial log: ");
+  Serial.print(line);
+  File f = SD.open(DIAL_LOG_FILE, FILE_WRITE); // appends
+  if (f) {
+    f.print(line);
+    f.close();
   }
 }
 

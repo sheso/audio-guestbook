@@ -271,6 +271,24 @@ static void handleZip(AsyncWebServerRequest* req) {
   req->send(res);
 }
 
+// The end of the dial log, without the first (possibly cut) line
+static void handleDials(AsyncWebServerRequest* req) {
+  if (!serviceLoggedIn(req)) {
+    req->send(403, "text/plain", "log in first");
+    return;
+  }
+  String text;
+  File f = SD.open(DIAL_LOG_FILE, FILE_READ);
+  if (f) {
+    uint32_t size = f.size(), start = size > DIAL_LOG_SHOWN ? size - DIAL_LOG_SHOWN : 0;
+    f.seek(start);
+    text = f.readString();
+    f.close();
+    if (start > 0) text = text.substring(text.indexOf('\n') + 1);
+  }
+  req->send(200, "text/plain; charset=utf-8", text);
+}
+
 void webBegin() {
   char token[33];
   for (int i = 0; i < 4; i++) snprintf(token + 8 * i, 9, "%08lx", (unsigned long)esp_random());
@@ -295,6 +313,7 @@ void webBegin() {
   server.on("/api/service/login", HTTP_POST, handleServiceLogin);
   server.on("/api/eggs", HTTP_GET, handleEggs);
   server.on("/api/egg", HTTP_GET, handleEgg);
+  server.on("/api/dials", HTTP_GET, handleDials);
   server.onNotFound([](AsyncWebServerRequest* req) { req->send(404, "text/plain", "not found"); });
   server.begin();
 }

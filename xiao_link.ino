@@ -20,6 +20,7 @@
  * wall-clock time expressed as a unix timestamp, the same way the SD card file dates are stored.
  * Easter eggs are the files "egg-<number>.wav" guests record for a dialled number (see dialEasterEgg()).
  * GET reads them when <num> is "egg-<number>" instead of a recording number; DATA echoes it back.
+ * <num> "dials" reads the dial log (DIAL_LOG_FILE), which only ever grows.
  * LIST, EGGS and GET are only answered in Ready mode, otherwise the reply is ERR <seq> BUSY: recording
  * always has priority over syncing. GET returns at most XIAO_MAX_CHUNK bytes and may return fewer
  * at the end of the file (0 bytes when <offset> is at or past the end).
@@ -191,7 +192,10 @@ static void xiaoGet(unsigned long seq, const char* args) {
     return;
   }
   snprintf(name, sizeof name, "%s.wav", id);
-  if (!eggNameLength(name)) {
+  if (strcmp(id, "dials") == 0) {
+    strcpy(name, DIAL_LOG_FILE);
+  }
+  else if (!eggNameLength(name)) {
     char* end;
     unsigned long num = strtoul(id, &end, 10);
     if (end == id || *end || num > 99999) {

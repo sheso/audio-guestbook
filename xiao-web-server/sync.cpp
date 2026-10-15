@@ -181,6 +181,34 @@ static LinkResult syncEggs() {
   return LinkResult::Ok;
 }
 
+// Appends what is new in the Teensy dial log. It only ever grows, so the local size is the offset.
+static LinkResult syncDialLog() {
+  File f = SD.open(DIAL_LOG_FILE, FILE_APPEND);
+  if (!f) {
+    setError("cannot write " DIAL_LOG_FILE);
+    return LinkResult::Error;
+  }
+  uint32_t offset = f.size();
+  LinkResult r;
+  for (;;) {
+    uint32_t got;
+    r = teensy->get("dials", offset, chunk, sizeof chunk, got);
+    if (r != LinkResult::Ok || got == 0) break;
+    if (f.write(chunk, got) != got) {
+      setError("SD write failed for " DIAL_LOG_FILE);
+      r = LinkResult::Error;
+      break;
+    }
+    offset += got;
+  }
+  f.close();
+  if (r == LinkResult::Error && teensy->lastError() == "NOT_FOUND") return LinkResult::Ok; // nothing dialled yet
+  if (r != LinkResult::Ok && r != LinkResult::Busy) {
+    setError(String("dial log: ") + linkResultName(r) + " " + teensy->lastError());
+  }
+  return r;
+}
+
 // One sync cycle; returns the time to wait before the next one [ms]
 static uint32_t syncCycle() {
   String mode;
@@ -229,6 +257,7 @@ static uint32_t syncCycle() {
     status.pending = --pending;
   }
   if (syncEggs() != LinkResult::Ok) return SYNC_BUSY_RETRY;
+  if (syncDialLog() != LinkResult::Ok) return SYNC_BUSY_RETRY;
 
   std::lock_guard<std::mutex> lock(statusMutex);
   lastSyncMs = millis();

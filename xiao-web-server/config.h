@@ -42,6 +42,8 @@
 #define INDEX_FILE DATA_DIR "/index.csv"
 #define INDEX_TMP DATA_DIR "/index.tmp"
 #define EGGS_DIR DATA_DIR "/eggs"
+#define DIAL_LOG_FILE DATA_DIR "/dials.log" // copy of the Teensy dial log, shown in the service view
+#define DIAL_LOG_SHOWN 16384 // [bytes] the end of the log sent to the page
 
 // Password of the service view with the easter eggs. It goes in service_secrets.h (copy
 // service_secrets.example.h), which is not committed. Without it the service view stays locked.
