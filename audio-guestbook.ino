@@ -6,7 +6,6 @@
  * 
  * When handset is lifted, a pre-recorded greeting message is played, followed by a tone.
  * Then, recording starts, and continues until the handset is replaced.
- * Playback button allows all messages currently saved on SD card through earpiece
  * Dialling a number from dialTracks plays its file from the SD card, any other number plays
  * the easter egg a guest recorded for it, or invites the guest to record one
  * 
@@ -37,9 +36,8 @@
 #define SDCARD_CS_PIN    10
 #define SDCARD_MOSI_PIN  11
 #define SDCARD_SCK_PIN   13
-// And those used for inputs (pins 0 and 1 are kept free for Serial1 to the XIAO web server)
+// And the hook switch (pins 0 and 1 are kept free for Serial1 to the XIAO web server)
 #define HOOK_PIN 4
-#define PLAYBACK_BUTTON_PIN 5
 // Rotary dial: pulse contact and "dial is turning" contact
 #define DIAL_PULSE_PIN 2
 #define DIAL_ACTIVE_PIN 3
@@ -100,9 +98,8 @@ char eggFile[40] = "";
 // The file object itself
 File frec;
 
-// Use long 40ms debounce time on both switches
+// Use long 40ms debounce time on the hook switch
 Bounce buttonRecord = Bounce(HOOK_PIN, 40);
-Bounce buttonPlay = Bounce(PLAYBACK_BUTTON_PIN, 40);
 // Dial pulses are only ~60ms long, so use short debounce times
 Bounce dialPulse = Bounce(DIAL_PULSE_PIN, 5);
 Bounce dialActive = Bounce(DIAL_ACTIVE_PIN, 10);
@@ -150,7 +147,6 @@ void setup() {
   print_mode();
   // Configure the input pins
   pinMode(HOOK_PIN, INPUT_PULLUP);
-  pinMode(PLAYBACK_BUTTON_PIN, INPUT_PULLUP);
   pinMode(DIAL_PULSE_PIN, INPUT_PULLUP);
   pinMode(DIAL_ACTIVE_PIN, INPUT_PULLUP);
   // Re-create the dial debouncers now the pull-ups are on (the global ones read the pins too early),
@@ -226,7 +222,6 @@ void setup() {
 void loop() {
   // First, read the buttons
   buttonRecord.update();
-  buttonPlay.update();
   updateDial();
 
   switch(mode){
@@ -238,10 +233,6 @@ void loop() {
         promptFile = "greeting.wav";
         eggFile[0] = '\0';
         mode = Mode::Prompting; print_mode();
-      }
-      else if(buttonPlay.fallingEdge()) {
-        //playAllRecordings();
-        playLastRecording();
       }
       break;
 
@@ -259,18 +250,11 @@ void loop() {
       while (!playWav1.isStopped()) {
         // Check whether the handset is replaced
         buttonRecord.update();
-        buttonPlay.update();
         updateDial();
         // Handset is replaced
         if(buttonRecord.fallingEdge()) {
           playWav1.stop();
           mode = Mode::Ready; print_mode();
-          return;
-        }
-        if(buttonPlay.fallingEdge()) {
-          playWav1.stop();
-          //playAllRecordings();
-          playLastRecording();
           return;
         }
         // Guest started dialling instead of listening
@@ -520,56 +504,6 @@ void stopRecording() {
 }
 
 
-void playAllRecordings() {
-  // Recording files are saved in the root directory
-  File dir = SD.open("/");
-  
-  while (true) {
-    File entry =  dir.openNextFile();
-    if (strstr(entry.name(), "greeting"))
-    {
-       entry =  dir.openNextFile();
-    }
-    if (!entry) {
-      // no more files
-      entry.close();
-      end_Beep();
-      break;
-    }
-    //int8_t len = strlen(entry.name()) - 4;
-//    if (strstr(strlwr(entry.name() + (len - 4)), ".raw")) {
-//    if (strstr(strlwr(entry.name() + (len - 4)), ".wav")) {
-    // the lines above throw a warning, so I replace them with this (which is also easier to read):
-    if (strstr(entry.name(), ".wav") || strstr(entry.name(), ".WAV")) {
-      Serial.print("Now playing ");
-      Serial.println(entry.name());
-      // Play a short beep before each message
-      waveform1.amplitude(beep_volume);
-      wait(750);
-      waveform1.amplitude(0);
-      // Play the file
-      playWav1.play(entry.name());
-      mode = Mode::Playing; print_mode();
-    }
-    entry.close();
-
-//    while (playWav1.isPlaying()) { // strangely enough, this works for playRaw, but it does not work properly for playWav
-    while (!playWav1.isStopped()) { // this works for playWav
-      buttonPlay.update();
-      buttonRecord.update();
-      // Button is pressed again
-//      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.fallingEdge()) {
-        playWav1.stop();
-        mode = Mode::Ready; print_mode();
-        return;
-      }   
-    }
-  }
-  // All files have been played
-  mode = Mode::Ready; print_mode();
-}
-
 void playLastRecording() {
   // Find the first available file number
   uint16_t idx = 0; 
@@ -588,11 +522,9 @@ void playLastRecording() {
       playWav1.play(filename);
       mode = Mode::Playing; print_mode();
       while (!playWav1.isStopped()) { // this works for playWav
-      buttonPlay.update();
       buttonRecord.update();
-      // Button is pressed again
-//      if(buttonPlay.risingEdge() || buttonRecord.risingEdge()) { // FIX
-      if(buttonPlay.fallingEdge() || buttonRecord.fallingEdge()) {
+      // Handset is replaced
+      if(buttonRecord.fallingEdge()) {
         playWav1.stop();
         mode = Mode::Ready; print_mode();
         return;
@@ -618,7 +550,6 @@ void playDialTrack(const char *file) {
   mode = Mode::Playing; print_mode();
   while (!playWav1.isStopped()) {
     buttonRecord.update();
-    buttonPlay.update();
     updateDial();
     if (buttonRecord.fallingEdge()) {
       playWav1.stop();
@@ -674,12 +605,9 @@ void wait(unsigned int milliseconds) {
 
   while (msec <= milliseconds) {
     buttonRecord.update();
-    buttonPlay.update();
     updateDial();
     if (buttonRecord.fallingEdge()) Serial.println("Button (hook) Press");
-    if (buttonPlay.fallingEdge()) Serial.println("Button (play) Press");
     if (buttonRecord.risingEdge()) Serial.println("Button (hook) Release"); 
-    if (buttonPlay.risingEdge()) Serial.println("Button (play) Release");
   }
 }
 
