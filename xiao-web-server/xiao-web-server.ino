@@ -49,6 +49,8 @@ static bool joinNetwork() {
   Serial.println("Wi-Fi: joining \"" WIFI_SSID "\"");
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  // In modem sleep the XIAO misses packets from the router (mDNS queries, new TCP connections)
+  WiFi.setSleep(false);
   // The router hands out the address, so print it on every (re)connection
   WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
     Serial.println("Wi-Fi: connected, open http://" + WiFi.localIP().toString() + "/ or http://" MDNS_NAME ".local/");

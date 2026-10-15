@@ -3,9 +3,10 @@
 // Existing Wi-Fi network to join. Its name and password go in wifi_secrets.h (copy
 // wifi_secrets.example.h), which is not committed. Without it, or when the network cannot be
 // joined within WIFI_CONNECT_TIMEOUT, the XIAO starts its own access point instead.
-#if __has_include("wifi_secrets.h")
-#include "wifi_secrets.h"
-#endif
+// Disabled for now: the home router isolates its Wi-Fi clients, so phones cannot reach the XIAO there
+// #if __has_include("wifi_secrets.h")
+// #include "wifi_secrets.h"
+// #endif
 #ifndef WIFI_SSID
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
