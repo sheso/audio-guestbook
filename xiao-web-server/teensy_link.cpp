@@ -86,8 +86,8 @@ bool TeensyLink::readReply(String& type, String& rest, uint32_t timeoutMs) {
     while (*r == ' ') r++;
     if (replySeq != seq) {
       // Stale reply: a DATA header is followed by its payload, which must not be taken for lines
-      unsigned long num, offset, len;
-      if (strcmp(t, "DATA") == 0 && sscanf(r, "%lu %lu %lu", &num, &offset, &len) == 3 && len <= TEENSY_CHUNK) {
+      unsigned long offset, len;
+      if (strcmp(t, "DATA") == 0 && sscanf(r, "%*s %lu %lu", &offset, &len) == 2 && len <= TEENSY_CHUNK) {
         skipBytes(len, millis() + REPLY_TIMEOUT);
       }
       continue;
@@ -138,16 +138,39 @@ LinkResult TeensyLink::list(std::vector<RemoteFile>& files) {
   return LinkResult::Timeout;
 }
 
-LinkResult TeensyLink::get(uint32_t num, uint32_t offset, uint8_t* buf, uint32_t len, uint32_t& got) {
+LinkResult TeensyLink::eggs(std::vector<RemoteEgg>& eggs) {
+  eggs.clear();
+  send("EGGS", "");
+  String type, rest;
+  while (readReply(type, rest, LIST_LINE_TIMEOUT)) {
+    char number[32];
+    unsigned long size, mtime, count;
+    if (type == "EGG" && sscanf(rest.c_str(), "%31s %lu %lu", number, &size, &mtime) == 3) {
+      eggs.push_back({number, (uint32_t)size, (uint32_t)mtime});
+    }
+    else if (type == "END" && sscanf(rest.c_str(), "%lu", &count) == 1) {
+      if (count == eggs.size()) return LinkResult::Ok;
+      error = "EGGS lost lines: got " + String(eggs.size()) + " of " + String(count);
+      return LinkResult::Error;
+    }
+    else {
+      return errorResult(type, rest);
+    }
+  }
+  return LinkResult::Timeout;
+}
+
+LinkResult TeensyLink::get(const String& id, uint32_t offset, uint8_t* buf, uint32_t len, uint32_t& got) {
   got = 0;
-  send("GET", String(num) + " " + String(offset) + " " + String(len));
+  send("GET", id + " " + String(offset) + " " + String(len));
   String type, rest;
   if (!readReply(type, rest, REPLY_TIMEOUT)) return LinkResult::Timeout;
-  unsigned long rNum, rOffset, rLen, rCrc;
-  if (type != "DATA" || sscanf(rest.c_str(), "%lu %lu %lu %lx", &rNum, &rOffset, &rLen, &rCrc) != 4) {
+  char rId[32];
+  unsigned long rOffset, rLen, rCrc;
+  if (type != "DATA" || sscanf(rest.c_str(), "%31s %lu %lu %lx", rId, &rOffset, &rLen, &rCrc) != 4) {
     return errorResult(type, rest);
   }
-  if (rNum != num || rOffset != offset || rLen > len) {
+  if (id != rId || rOffset != offset || rLen > len) {
     error = "DATA does not match the request: " + rest;
     return LinkResult::Error;
   }

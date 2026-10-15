@@ -2,6 +2,7 @@
 #include "catalog.h"
 #include "config.h"
 #include "crc32.h"
+#include "eggs.h"
 #include "teensy_link.h"
 #include <SD.h>
 #include <mutex>
@@ -83,14 +84,16 @@ static void updateTeensyClock(uint32_t teensyTime) {
   }
 }
 
-// Copies one recording into its .part file, resuming a previous attempt, then moves it in place
-static LinkResult copyRecording(const RemoteFile& remote) {
-  String part = Catalog::partPath(remote.num);
-  uint32_t offset = 0, crc = 0;
+// Copies a Teensy file (id as in TeensyLink::get) into its .part file, resuming a previous attempt,
+// then moves it to dest. progressNum is the recording number shown on the page, or -1 for none.
+static LinkResult copyFile(const String& id, uint32_t size, const String& part, const String& dest,
+                           int32_t progressNum, uint32_t& crc) {
+  uint32_t offset = 0;
+  crc = 0;
 
   if (SD.exists(part)) {
     File f = SD.open(part, FILE_READ);
-    if (f && f.size() <= remote.size) {
+    if (f && f.size() <= size) {
       int n;
       while ((n = f.read(chunk, sizeof chunk)) > 0) crc = crc32Update(crc, chunk, n);
       offset = f.size();
@@ -104,15 +107,14 @@ static LinkResult copyRecording(const RemoteFile& remote) {
     return LinkResult::Error;
   }
 
-  Serial.printf("Sync: copying %05lu.wav from %lu of %lu bytes\n", (unsigned long)remote.num,
-                (unsigned long)offset, (unsigned long)remote.size);
+  Serial.printf("Sync: copying %s from %lu of %lu bytes\n", id.c_str(), (unsigned long)offset, (unsigned long)size);
   uint32_t started = millis(), startOffset = offset;
   LinkResult r = LinkResult::Ok;
   int retries = 0;
-  while (offset < remote.size) {
-    setProgress(remote.num, offset, remote.size);
+  while (offset < size) {
+    if (progressNum >= 0) setProgress(progressNum, offset, size);
     uint32_t got;
-    r = teensy->get(remote.num, offset, chunk, min((uint32_t)sizeof chunk, remote.size - offset), got);
+    r = teensy->get(id, offset, chunk, min((uint32_t)sizeof chunk, size - offset), got);
     if (r == LinkResult::Ok && got == 0) {
       r = LinkResult::Error; // the file got shorter since LIST
     }
@@ -130,27 +132,52 @@ static LinkResult copyRecording(const RemoteFile& remote) {
     offset += got;
   }
   out.close();
-  setProgress(0, 0, 0);
+  if (progressNum >= 0) setProgress(0, 0, 0);
 
-  if (offset < remote.size) {
+  if (offset < size) {
     // Busy is expected when a guest lifts the handset; the copy resumes later
     if (r != LinkResult::Busy) {
-      setError(String("copying ") + remote.num + " stopped at " + offset + ": " + linkResultName(r) +
-               " " + teensy->lastError());
+      setError("copying " + id + " stopped at " + offset + ": " + linkResultName(r) + " " + teensy->lastError());
     }
     return r == LinkResult::Ok ? LinkResult::Error : r;
   }
 
-  String wav = Catalog::path(remote.num);
-  SD.remove(wav);
-  if (!SD.rename(part, wav)) {
+  SD.remove(dest);
+  if (!SD.rename(part, dest)) {
     setError("cannot rename " + part);
     return LinkResult::Error;
   }
-  catalog.add({remote.num, remote.size, remote.mtime, crc});
   uint32_t ms = max(millis() - started, (uint32_t)1);
-  Serial.printf("Sync: %05lu.wav done, %lu KB/s\n", (unsigned long)remote.num,
-                (unsigned long)((offset - startOffset) / ms));
+  Serial.printf("Sync: %s done, %lu KB/s\n", id.c_str(), (unsigned long)((offset - startOffset) / ms));
+  return LinkResult::Ok;
+}
+
+static LinkResult copyRecording(const RemoteFile& remote) {
+  uint32_t crc;
+  LinkResult r = copyFile(String(remote.num), remote.size, Catalog::partPath(remote.num), Catalog::path(remote.num),
+                          remote.num, crc);
+  if (r == LinkResult::Ok) catalog.add({remote.num, remote.size, remote.mtime, crc});
+  return r;
+}
+
+// Copies easter eggs that are new or changed on the Teensy
+static LinkResult syncEggs() {
+  std::vector<RemoteEgg> eggs;
+  LinkResult r = teensy->eggs(eggs);
+  if (r != LinkResult::Ok) {
+    if (r != LinkResult::Busy) setError(String("EGGS: ") + linkResultName(r) + " " + teensy->lastError());
+    return r;
+  }
+  if (!SD.exists(EGGS_DIR)) SD.mkdir(EGGS_DIR);
+  for (const RemoteEgg& e : eggs) {
+    if (!validEggNumber(e.number)) continue;
+    eggsSetMtime(e.number, e.mtime);
+    Egg local;
+    if (eggFind(e.number, local) && local.size == e.size) continue;
+    uint32_t crc;
+    r = copyFile("egg-" + e.number, e.size, eggPartPath(e.number), eggPath(e.number), -1, crc);
+    if (r != LinkResult::Ok) return r;
+  }
   return LinkResult::Ok;
 }
 
@@ -201,6 +228,7 @@ static uint32_t syncCycle() {
     std::lock_guard<std::mutex> lock(statusMutex);
     status.pending = --pending;
   }
+  if (syncEggs() != LinkResult::Ok) return SYNC_BUSY_RETRY;
 
   std::lock_guard<std::mutex> lock(statusMutex);
   lastSyncMs = millis();

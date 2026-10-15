@@ -10,6 +10,13 @@ struct RemoteFile {
   uint32_t mtime;
 };
 
+// An easter egg: "egg-<number>.wav" on the Teensy
+struct RemoteEgg {
+  String number;
+  uint32_t size;
+  uint32_t mtime;
+};
+
 enum class LinkResult {
   Ok,
   Busy,     // Teensy is recording, playing etc.
@@ -26,8 +33,10 @@ public:
 
   LinkResult ping(String& mode, uint32_t& teensyTime);
   LinkResult list(std::vector<RemoteFile>& files);
-  // Reads up to len bytes at offset into buf; got is set to the number of bytes received
-  LinkResult get(uint32_t num, uint32_t offset, uint8_t* buf, uint32_t len, uint32_t& got);
+  LinkResult eggs(std::vector<RemoteEgg>& eggs);
+  // Reads up to len bytes at offset into buf; got is set to the number of bytes received.
+  // id is a recording number ("17") or an easter egg ("egg-4242").
+  LinkResult get(const String& id, uint32_t offset, uint8_t* buf, uint32_t len, uint32_t& got);
   LinkResult setTime(uint32_t t);
 
   // Last ERR reason, for logging

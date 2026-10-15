@@ -10,20 +10,24 @@
  *   LIST <seq>                      -> FILE <seq> <num> <size> <mtime>  (one per recording)
  *                                      END <seq> <count>
  *   GET <seq> <num> <offset> <len>  -> DATA <seq> <num> <offset> <len> <crc32> + <len> bytes
+ *   EGGS <seq>                      -> EGG <seq> <number> <size> <mtime>  (one per easter egg)
+ *                                      END <seq> <count>
  *   TIME <seq> <unixtime>           -> OK <seq>
  *   (any error)                     -> ERR <seq> <reason>
  *
  * Recordings are identified by their number: <num> 17 is the file "00017.wav". The sketch asks for
  * " 00017.wav", but SdFat drops leading spaces, so that is the name on the card. Times are local
  * wall-clock time expressed as a unix timestamp, the same way the SD card file dates are stored.
- * LIST and GET are only answered in Ready mode, otherwise the reply is ERR <seq> BUSY: recording
+ * Easter eggs are the files "egg-<number>.wav" guests record for a dialled number (see dialEasterEgg()).
+ * GET reads them when <num> is "egg-<number>" instead of a recording number; DATA echoes it back.
+ * LIST, EGGS and GET are only answered in Ready mode, otherwise the reply is ERR <seq> BUSY: recording
  * always has priority over syncing. GET returns at most XIAO_MAX_CHUNK bytes and may return fewer
  * at the end of the file (0 bytes when <offset> is at or past the end).
  */
 
 #define XIAO_BAUD 2000000
 #define XIAO_MAX_CHUNK 4096
-#define XIAO_LINE_MAX 64
+#define XIAO_LINE_MAX 96
 #define noDEBUG_XIAO_LINK // print every request on the USB serial monitor
 
 static char xiaoLine[XIAO_LINE_MAX];
@@ -103,12 +107,15 @@ static void xiaoHandleLine(char* line) {
     Serial.printf("Clock set by XIAO to %04d-%02d-%02d %02d:%02d:%02d\n",
                   year(), month(), day(), hour(), minute(), second());
   }
-  else if (strcmp(cmd, "LIST") == 0 || strcmp(cmd, "GET") == 0) {
+  else if (strcmp(cmd, "LIST") == 0 || strcmp(cmd, "EGGS") == 0 || strcmp(cmd, "GET") == 0) {
     if (mode != Mode::Ready) {
       Serial1.printf("ERR %lu BUSY\n", seq);
     }
     else if (cmd[0] == 'L') {
       xiaoList(seq);
+    }
+    else if (cmd[0] == 'E') {
+      xiaoEggs(seq);
     }
     else {
       xiaoGet(seq, args);
@@ -132,6 +139,33 @@ static long recordingNumber(const char* name) {
   return num;
 }
 
+// Recognise "egg-<number>.wav" and return the length of "egg-<number>", or 0
+static size_t eggNameLength(const char* name) {
+  size_t len = strlen(name);
+  if (len < 9 || strncmp(name, "egg-", 4) != 0 || strcasecmp(name + len - 4, ".wav") != 0) return 0;
+  for (size_t i = 4; i < len - 4; i++) {
+    if (!isdigit(name[i])) return 0;
+  }
+  return len - 4;
+}
+
+static void xiaoEggs(unsigned long seq) {
+  File dir = SD.open("/");
+  unsigned count = 0;
+  while (File entry = dir.openNextFile()) {
+    size_t len = entry.isDirectory() ? 0 : eggNameLength(entry.name());
+    if (len) {
+      DateTimeFields tm;
+      unsigned long mtime = entry.getModifyTime(tm) ? makeTime(tm) : 0;
+      Serial1.printf("EGG %lu %.*s %lu %lu\n", seq, (int)(len - 4), entry.name() + 4, (unsigned long)entry.size(), mtime);
+      count++;
+    }
+    entry.close();
+  }
+  dir.close();
+  Serial1.printf("END %lu %u\n", seq, count);
+}
+
 static void xiaoList(unsigned long seq) {
   File dir = SD.open("/");
   unsigned count = 0;
@@ -150,13 +184,22 @@ static void xiaoList(unsigned long seq) {
 }
 
 static void xiaoGet(unsigned long seq, const char* args) {
-  unsigned long num, offset, len;
-  if (sscanf(args, "%lu %lu %lu", &num, &offset, &len) != 3 || num > 99999) {
+  char id[32], name[40];
+  unsigned long offset, len;
+  if (sscanf(args, "%31s %lu %lu", id, &offset, &len) != 3) {
     Serial1.printf("ERR %lu BAD_ARGS\n", seq);
     return;
   }
-  char name[12];
-  snprintf(name, sizeof name, " %05lu.wav", num);
+  snprintf(name, sizeof name, "%s.wav", id);
+  if (!eggNameLength(name)) {
+    char* end;
+    unsigned long num = strtoul(id, &end, 10);
+    if (end == id || *end || num > 99999) {
+      Serial1.printf("ERR %lu BAD_ARGS\n", seq);
+      return;
+    }
+    snprintf(name, sizeof name, " %05lu.wav", num);
+  }
   File f = SD.open(name, FILE_READ);
   if (!f) {
     Serial1.printf("ERR %lu NOT_FOUND\n", seq);
@@ -174,9 +217,9 @@ static void xiaoGet(unsigned long seq, const char* args) {
     Serial1.printf("ERR %lu READ_FAILED\n", seq);
     return;
   }
-  Serial1.printf("DATA %lu %lu %lu %lu %08lx\n", seq, num, offset, len, (unsigned long)crc32(0, xiaoChunk, len));
+  Serial1.printf("DATA %lu %s %lu %lu %08lx\n", seq, id, offset, len, (unsigned long)crc32(0, xiaoChunk, len));
   Serial1.write(xiaoChunk, len);
-  if (offset == 0) Serial.printf("XIAO: sending%s (%lu bytes)\n", name, size);
+  if (offset == 0) Serial.printf("XIAO: sending %s (%lu bytes)\n", name[0] == ' ' ? name + 1 : name, size);
 }
 
 // Standard CRC-32, same as zlib's crc32(): start with crc = 0, or pass the previous result to continue

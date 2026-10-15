@@ -1,6 +1,7 @@
 #include "web.h"
 #include "catalog.h"
 #include "config.h"
+#include "eggs.h"
 #include "sync.h"
 #include "web_page.h"
 #include "zip_stream.h"
@@ -12,6 +13,8 @@ static AsyncWebServer server(80);
 static bool requestLog = false;
 static uint32_t requestCount = 0, lastRequestMs = 0; // written only by the async_tcp task
 static IPAddress lastClient;
+// Cookie value of a logged-in service view, new after every reboot
+static String serviceToken;
 
 void webSetLog(bool on) {
   requestLog = on;
@@ -115,41 +118,37 @@ static std::shared_ptr<uint8_t[]> fixedWavHeader(File& file, uint32_t size) {
   return h;
 }
 
-// Serves one recording, with Range support (Safari needs it to play and seek audio)
-static void handleRecording(AsyncWebServerRequest* req) {
-  Recording rec;
-  if (!req->hasParam("n") || !catalog.find(req->getParam("n")->value().toInt(), rec)) {
-    req->send(404, "text/plain", "no such recording");
-    return;
-  }
-  auto file = std::make_shared<File>(SD.open(Catalog::path(rec.num), FILE_READ));
+// Serves a WAV file, with Range support (Safari needs it to play and seek audio)
+static void sendWav(AsyncWebServerRequest* req, const String& path, uint32_t size, const String& label,
+                    const String& downloadName) {
+  auto file = std::make_shared<File>(SD.open(path, FILE_READ));
   if (!*file) {
     req->send(500, "text/plain", "cannot open the file");
     return;
   }
-  std::shared_ptr<uint8_t[]> header = fixedWavHeader(*file, rec.size);
+  std::shared_ptr<uint8_t[]> header = fixedWavHeader(*file, size);
 
-  uint32_t start = 0, end = rec.size - 1;
+  uint32_t start = 0, end = size - 1;
   bool partial = false;
   if (req->hasHeader("Range")) {
-    if (!parseRange(req->getHeader("Range")->value(), rec.size, start, end)) {
+    if (!parseRange(req->getHeader("Range")->value(), size, start, end)) {
       AsyncWebServerResponse* res = req->beginResponse(416, "text/plain", "bad range");
-      res->addHeader("Content-Range", "bytes */" + String(rec.size));
+      res->addHeader("Content-Range", "bytes */" + String(size));
       req->send(res);
       return;
     }
     partial = true;
   }
-  uint32_t len = rec.size ? end - start + 1 : 0;
+  uint32_t len = size ? end - start + 1 : 0;
 
   auto sent = std::make_shared<uint32_t>(0);
   if (requestLog) {
-    Serial.printf("HTTP   rec %lu, %s, bytes %lu-%lu of %lu\n", (unsigned long)rec.num,
+    Serial.printf("HTTP   %s, %s, bytes %lu-%lu of %lu\n", label.c_str(),
                   partial ? req->getHeader("Range")->value().c_str() : "no range", (unsigned long)start,
-                  (unsigned long)end, (unsigned long)rec.size);
-    uint32_t num = rec.num, started = millis();
-    req->onDisconnect([sent, num, len, started]() {
-      Serial.printf("HTTP   rec %lu: closed after %lu of %lu bytes, %lu ms\n", (unsigned long)num,
+                  (unsigned long)end, (unsigned long)size);
+    uint32_t started = millis();
+    req->onDisconnect([sent, label, len, started]() {
+      Serial.printf("HTTP   %s: closed after %lu of %lu bytes, %lu ms\n", label.c_str(),
                     (unsigned long)*sent, (unsigned long)len, (unsigned long)(millis() - started));
     });
   }
@@ -168,12 +167,73 @@ static void handleRecording(AsyncWebServerRequest* req) {
   res->addHeader("Accept-Ranges", "bytes");
   if (partial) {
     res->setCode(206);
-    res->addHeader("Content-Range", "bytes " + String(start) + "-" + String(end) + "/" + String(rec.size));
+    res->addHeader("Content-Range", "bytes " + String(start) + "-" + String(end) + "/" + String(size));
   }
   if (req->hasParam("dl")) {
-    res->addHeader("Content-Disposition", "attachment; filename=\"" + Catalog::downloadName(rec) + "\"");
+    res->addHeader("Content-Disposition", "attachment; filename=\"" + downloadName + "\"");
   }
   req->send(res);
+}
+
+static void handleRecording(AsyncWebServerRequest* req) {
+  Recording rec;
+  if (!req->hasParam("n") || !catalog.find(req->getParam("n")->value().toInt(), rec)) {
+    req->send(404, "text/plain", "no such recording");
+    return;
+  }
+  sendWav(req, Catalog::path(rec.num), rec.size, "rec " + String(rec.num), Catalog::downloadName(rec));
+}
+
+// The service view: the password is checked here, the browser then keeps a session cookie
+static bool serviceLoggedIn(AsyncWebServerRequest* req) {
+  if (!req->hasHeader("Cookie")) return false;
+  String cookies = "; " + req->getHeader("Cookie")->value() + ";";
+  return cookies.indexOf("; svc=" + serviceToken + ";") >= 0;
+}
+
+static void handleServiceLogin(AsyncWebServerRequest* req) {
+  if (strlen(SERVICE_PASSWORD) == 0) {
+    req->send(503, "text/plain", "no service password in service_secrets.h");
+    return;
+  }
+  if (!req->hasParam("p", true) || req->getParam("p", true)->value() != SERVICE_PASSWORD) {
+    Serial.println("HTTP service login with a wrong password from " + req->client()->remoteIP().toString());
+    req->send(403, "text/plain", "wrong password");
+    return;
+  }
+  AsyncWebServerResponse* res = req->beginResponse(204);
+  res->addHeader("Set-Cookie", "svc=" + serviceToken + "; Path=/; HttpOnly; SameSite=Strict");
+  req->send(res);
+}
+
+static void handleEggs(AsyncWebServerRequest* req) {
+  if (!serviceLoggedIn(req)) {
+    req->send(403, "text/plain", "log in first");
+    return;
+  }
+  std::vector<Egg> eggs = eggsList();
+  String json = "[";
+  for (size_t i = 0; i < eggs.size(); i++) {
+    const Egg& e = eggs[i];
+    if (i) json += ",";
+    json += "{\"n\":\"" + e.number + "\",\"size\":" + String(e.size) +
+            ",\"t\":" + String(clockValid(e.mtime) ? e.mtime : 0) + "}";
+  }
+  json += "]";
+  req->send(200, "application/json", json);
+}
+
+static void handleEgg(AsyncWebServerRequest* req) {
+  if (!serviceLoggedIn(req)) {
+    req->send(403, "text/plain", "log in first");
+    return;
+  }
+  Egg egg;
+  if (!req->hasParam("n") || !eggFind(req->getParam("n")->value(), egg)) {
+    req->send(404, "text/plain", "no such easter egg");
+    return;
+  }
+  sendWav(req, eggPath(egg.number), egg.size, "egg " + egg.number, "egg-" + egg.number + ".wav");
 }
 
 // All copied recordings as one uncompressed ZIP, generated while it is being sent
@@ -212,6 +272,9 @@ static void handleZip(AsyncWebServerRequest* req) {
 }
 
 void webBegin() {
+  char token[33];
+  for (int i = 0; i < 4; i++) snprintf(token + 8 * i, 9, "%08lx", (unsigned long)esp_random());
+  serviceToken = token;
   server.addMiddleware([](AsyncWebServerRequest* req, ArMiddlewareNext next) {
     requestCount++;
     lastRequestMs = millis();
@@ -229,6 +292,9 @@ void webBegin() {
   server.on("/api/time", HTTP_POST, handleTime);
   server.on("/api/rec", HTTP_GET, handleRecording);
   server.on("/guestbook.zip", HTTP_GET, handleZip);
+  server.on("/api/service/login", HTTP_POST, handleServiceLogin);
+  server.on("/api/eggs", HTTP_GET, handleEggs);
+  server.on("/api/egg", HTTP_GET, handleEgg);
   server.onNotFound([](AsyncWebServerRequest* req) { req->send(404, "text/plain", "not found"); });
   server.begin();
 }

@@ -28,6 +28,31 @@ body {
 }
 main { max-width: 640px; margin: 0 auto; padding: 20px 16px; }
 h1 { font-size: 24px; margin: 0 0 4px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tool {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--line); cursor: pointer;
+  background: var(--card); color: var(--muted); display: grid; place-items: center; padding: 0;
+}
+.tool.on { color: var(--accent); border-color: var(--accent); }
+#service { margin: 18px 0 24px; }
+.svc-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+h2 { font-size: 18px; margin: 0; }
+.link { background: none; border: 0; color: var(--accent); font: inherit; font-size: 14px; cursor: pointer; padding: 4px; }
+dialog {
+  border: 0; border-radius: 14px; padding: 20px; width: min(340px, calc(100% - 32px));
+  background: var(--card); color: var(--text);
+}
+dialog::backdrop { background: rgb(0 0 0 / .4); }
+dialog h2 { margin-bottom: 12px; }
+dialog input {
+  width: 100%; font: inherit; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text);
+}
+dialog .msg { color: var(--off); font-size: 14px; min-height: 20px; margin: 6px 0; }
+dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; }
+dialog .buttons button { font: inherit; padding: 8px 16px; border-radius: 10px; border: 0; cursor: pointer; }
+dialog .ok { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+dialog .cancel { background: none; color: var(--muted); }
 .status { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--off); }
 .dot.ok { background: var(--ok); } .dot.busy { background: var(--busy); }
@@ -64,14 +89,39 @@ audio { width: 100%; }
 </head>
 <body>
 <main>
-  <h1>Гостевая книга</h1>
+  <div class="top">
+    <h1>Гостевая книга</h1>
+    <button class="tool" id="tool" aria-label="Сервис: пасхалки" title="Сервис">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+        <path d="M4 4l2 .5 5 5"/>
+        <path d="M14 14l5.5 5.5" stroke-width="3.5"/>
+      </svg>
+    </button>
+  </div>
   <div class="status" id="status">Загрузка…</div>
   <div class="warn" id="clock" hidden>Часы телефона не выставлены, у новых записей не будет даты.
     Они выставятся автоматически по времени этого устройства.</div>
   <div class="error" id="error"></div>
+  <section id="service" hidden>
+    <div class="svc-head"><h2>Пасхалки</h2><button class="link" id="svcClose">Закрыть</button></div>
+    <div id="eggs"></div>
+  </section>
   <a class="zip disabled" id="zip" href="/guestbook.zip" download>Скачать всё<small></small></a>
   <div id="list"></div>
 </main>
+<dialog id="login">
+  <form id="loginForm">
+    <h2>Сервис</h2>
+    <input type="password" id="password" placeholder="Пароль" autocomplete="current-password" required>
+    <div class="msg" id="loginMsg"></div>
+    <div class="buttons">
+      <button type="button" class="cancel" id="loginCancel">Отмена</button>
+      <button class="ok">Войти</button>
+    </div>
+  </form>
+</dialog>
 <div class="player" id="player"><div>
   <div class="now" id="now"></div>
   <audio id="audio" controls preload="none"></audio>
@@ -80,7 +130,7 @@ audio { width: 100%; }
 const $ = id => document.getElementById(id);
 const BYTES_PER_SEC = 88200; // 44.1 kHz, 16 bit, mono
 const MONTHS = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
-let playing = null, lastJson = '';
+let playing = null, lastJson = '', lastEggsJson = '', eggsTimer = null;
 
 function size(b) {
   if (b >= 1e9) return (b / 1e9).toFixed(1) + ' ГБ';
@@ -140,7 +190,7 @@ async function loadRecordings() {
     return;
   }
   $('list').innerHTML = '<ul>' + recs.map(r => `
-    <li data-n="${r.n}"${r.n === playing ? ' class="playing"' : ''}>
+    <li data-key="r${r.n}" data-src="/api/rec?n=${r.n}"${'r' + r.n === playing ? ' class="playing"' : ''}>
       <button class="play" aria-label="Слушать">▶</button>
       <div class="info">
         <div class="title">№${r.n}${r.t ? ' · ' + date(r.t) : ''}</div>
@@ -150,17 +200,73 @@ async function loadRecordings() {
     </li>`).join('') + '</ul>';
 }
 
-$('list').addEventListener('click', e => {
+function play(e) {
   const btn = e.target.closest('.play');
   if (!btn) return;
   const li = btn.closest('li');
-  playing = Number(li.dataset.n);
+  playing = li.dataset.key;
   document.querySelectorAll('li.playing').forEach(x => x.classList.remove('playing'));
   li.classList.add('playing');
   $('now').textContent = li.querySelector('.title').textContent;
   $('player').classList.add('on');
-  $('audio').src = '/api/rec?n=' + playing;
+  $('audio').src = li.dataset.src;
   $('audio').play();
+}
+$('list').addEventListener('click', play);
+$('eggs').addEventListener('click', play);
+
+// Service view with the easter eggs guests recorded for other numbers. The XIAO checks the password
+// and keeps the session in a cookie until it restarts.
+async function loadEggs() {
+  let res;
+  try { res = await fetch('/api/eggs'); } catch (e) { return false; }
+  if (!res.ok) return false;
+  const json = await res.text();
+  if (json === lastEggsJson) return true;
+  lastEggsJson = json;
+  const eggs = JSON.parse(json);
+  $('eggs').innerHTML = !eggs.length ? '<div class="empty">Пасхалок пока нет</div>' : '<ul>' + eggs.map(g => `
+    <li data-key="e${g.n}" data-src="/api/egg?n=${g.n}"${'e' + g.n === playing ? ' class="playing"' : ''}>
+      <button class="play" aria-label="Слушать">▶</button>
+      <div class="info">
+        <div class="title">☎ ${g.n}</div>
+        <div class="meta">${g.t ? date(g.t) + ' · ' : ''}${duration(g.size)} · ${size(g.size)}</div>
+      </div>
+      <a class="dl" href="/api/egg?n=${g.n}&dl=1" download="egg-${g.n}.wav">Скачать</a>
+    </li>`).join('') + '</ul>';
+  return true;
+}
+function showService(on) {
+  $('service').hidden = !on;
+  $('tool').classList.toggle('on', on);
+  clearInterval(eggsTimer);
+  if (on) eggsTimer = setInterval(loadEggs, 10000);
+}
+$('tool').addEventListener('click', async () => {
+  if (!$('service').hidden) { showService(false); return; }
+  if (await loadEggs()) { showService(true); return; }
+  $('password').value = '';
+  $('loginMsg').textContent = '';
+  $('login').showModal();
+});
+$('svcClose').addEventListener('click', () => showService(false));
+$('loginCancel').addEventListener('click', () => $('login').close());
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('loginMsg').textContent = '';
+  let res;
+  try {
+    res = await fetch('/api/service/login', { method: 'POST', body: new URLSearchParams({ p: $('password').value }) });
+  } catch (err) {
+    $('loginMsg').textContent = 'Нет связи с сервером';
+    return;
+  }
+  if (res.status === 403) { $('loginMsg').textContent = 'Неверный пароль'; return; }
+  if (!res.ok) { $('loginMsg').textContent = 'Сервисный вход не настроен'; return; }
+  $('login').close();
+  lastEggsJson = '';
+  await loadEggs();
+  showService(true);
 });
 
 // Give the phone's clock to the Teensy (it has no backup battery)

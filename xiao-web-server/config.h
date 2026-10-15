@@ -41,6 +41,16 @@
 #define DATA_DIR "/guestbook"
 #define INDEX_FILE DATA_DIR "/index.csv"
 #define INDEX_TMP DATA_DIR "/index.tmp"
+#define EGGS_DIR DATA_DIR "/eggs"
+
+// Password of the service view with the easter eggs. It goes in service_secrets.h (copy
+// service_secrets.example.h), which is not committed. Without it the service view stays locked.
+#if __has_include("service_secrets.h")
+#include "service_secrets.h"
+#endif
+#ifndef SERVICE_PASSWORD
+#define SERVICE_PASSWORD ""
+#endif
 
 // Times are local wall-clock time stored as unix timestamps. Anything earlier than this means the
 // Teensy clock was not set (without a VBAT battery it restarts from 2019-01-01 after power-up).
