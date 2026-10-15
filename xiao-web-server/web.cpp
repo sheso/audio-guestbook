@@ -48,8 +48,9 @@ static void handleStatus(AsyncWebServerRequest* req) {
   json += ",\"copyingDone\":" + String(s.copyingDone);
   json += ",\"copyingSize\":" + String(s.copyingSize);
   json += ",\"lastError\":\"" + jsonEscape(s.lastError) + "\"";
-  json += ",\"sdTotal\":" + String((double)SD.totalBytes(), 0);
-  json += ",\"sdUsed\":" + String((double)SD.usedBytes(), 0);
+  json += ",\"sdOk\":" + String(s.sdOk ? "true" : "false");
+  json += ",\"sdTotal\":" + String(s.sdOk ? (double)SD.totalBytes() : 0, 0);
+  json += ",\"sdUsed\":" + String(s.sdOk ? (double)SD.usedBytes() : 0, 0);
   json += "}";
   req->send(200, "application/json", json);
 }

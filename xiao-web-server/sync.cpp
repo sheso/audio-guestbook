@@ -5,6 +5,7 @@
 #include "eggs.h"
 #include "teensy_link.h"
 #include <SD.h>
+#include <atomic>
 #include <mutex>
 
 #define CHUNK_RETRIES 3
@@ -19,11 +20,13 @@ static uint32_t lastPongMs, lastPongTime; // Teensy clock at the last PONG
 static uint32_t lastSyncMs;
 static bool everSynced = false;
 static bool browserTimePending = false;
+static std::atomic<bool> sdOk{false};
 static uint32_t browserTime, browserTimeMs;
 
 SyncStatus syncStatus() {
   std::lock_guard<std::mutex> lock(statusMutex);
   SyncStatus s = status;
+  s.sdOk = sdOk;
   uint32_t now = millis();
   s.teensyOnline = lastPongMs != 0 && now - lastPongMs < TEENSY_ONLINE_TIMEOUT;
   s.teensyTime = lastPongMs ? lastPongTime + (now - lastPongMs) / 1000 : 0;
@@ -266,7 +269,22 @@ static uint32_t syncCycle() {
   return SYNC_INTERVAL;
 }
 
+// Mounts the SD card, retrying until it works, and loads the index
+static void mountSd() {
+  while (!SD.begin(SD_CS_PIN, SPI, SD_FREQ)) {
+    setError("cannot read the SD card of the XIAO, retrying");
+    SD.end();
+    delay(5000);
+  }
+  Serial.printf("SD card: %llu MB used of %llu MB\n", SD.usedBytes() >> 20, SD.totalBytes() >> 20);
+  catalog.begin();
+  sdOk = true;
+  std::lock_guard<std::mutex> lock(statusMutex);
+  status.lastError = "";
+}
+
 static void syncTask(void*) {
+  mountSd();
   catalog.adoptOrphans();
   for (;;) {
     uint32_t wait = syncCycle();

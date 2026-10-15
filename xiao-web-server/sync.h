@@ -2,6 +2,7 @@
 #include <Arduino.h>
 
 struct SyncStatus {
+  bool sdOk = false;          // the SD card is mounted and the index is loaded
   bool teensyOnline = false;  // answered within TEENSY_ONLINE_TIMEOUT
   String teensyMode;          // Ready, Recording, ...
   uint32_t teensyTime = 0;    // Teensy clock now (estimated from the last PONG)

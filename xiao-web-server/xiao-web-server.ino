@@ -27,6 +27,8 @@
 
 static void printStatus() {
   SyncStatus s = syncStatus();
+  if (s.sdOk) Serial.printf("SD card: %llu MB used of %llu MB\n", SD.usedBytes() >> 20, SD.totalBytes() >> 20);
+  else Serial.println("SD card: cannot be read, retrying");
   Serial.printf("Teensy: %s, mode %s, clock %lu (%s)\n", s.teensyOnline ? "online" : "offline",
                 s.teensyMode.c_str(), (unsigned long)s.teensyTime, clockValid(s.teensyTime) ? "valid" : "not set");
   Serial.printf("Recordings on the Teensy: %d, copied: %u, pending: %d, last sync: %ld s ago\n",
@@ -154,13 +156,8 @@ void setup() {
   delay(1000);
   Serial.println("Audio guestbook web server");
 
-  while (!SD.begin(SD_CS_PIN, SPI, SD_FREQ)) {
-    Serial.println("Unable to access the SD card, retrying");
-    delay(5000);
-  }
-  Serial.printf("SD card: %llu MB used of %llu MB\n", SD.usedBytes() >> 20, SD.totalBytes() >> 20);
-  catalog.begin();
-
+  // The SD card is mounted by the sync task, which keeps retrying: without it the network and the
+  // page still come up and show the problem
   if (!joinNetwork()) startAccessPoint();
   if (MDNS.begin(MDNS_NAME)) MDNS.addService("http", "tcp", 80);
 

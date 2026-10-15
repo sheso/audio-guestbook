@@ -105,6 +105,8 @@ audio { width: 100%; }
     </button>
   </div>
   <div class="status" id="status">Загрузка…</div>
+  <div class="warn" id="sd" hidden>SD-карта XIAO не читается, записи не копируются и не показываются.
+    Проверь, что карта вставлена в слот платы Sense до щелчка. XIAO пробует снова каждые 5 секунд.</div>
   <div class="warn" id="clock" hidden>Часы телефона не выставлены, у новых записей не будет даты.
     Они выставятся автоматически по времени этого устройства.</div>
   <div class="error" id="error"></div>
@@ -175,6 +177,7 @@ async function loadStatus() {
     else if (s.lastSyncAgo >= 0) parts.push(`<span>Проверено ${ago(s.lastSyncAgo)}</span>`);
     if (s.sdTotal) parts.push(`<span>Свободно ${size(s.sdTotal - s.sdUsed)}</span>`);
     $('status').innerHTML = parts.join('');
+    $('sd').hidden = s.sdOk;
     $('clock').hidden = !s.teensyOnline || s.clockValid;
     $('error').textContent = s.lastError ? 'Последняя ошибка: ' + s.lastError : '';
   } catch (e) {
